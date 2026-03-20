@@ -16,3 +16,4 @@ research/sweeps/output/
 research/sweeps/logs/
 .tmp/
 .venv-modal/
+modal_runs/

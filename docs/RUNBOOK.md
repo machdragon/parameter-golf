@@ -273,12 +273,21 @@ Training uses **`cwd=/vol/runs/<run_id>`**, so logs and `final_model.*` persist 
 
 Commit is performed automatically at the end of each training function.
 
+**Verify the volume** (path defaults to `/` on the volume — you should see `datasets/`, `tokenizers/`, and after a good run `runs/`):
+
+```bash
+.venv-modal/bin/modal volume ls parameter-golf-data
+.venv-modal/bin/modal volume ls parameter-golf-data runs
+```
+
 **Download to your machine:**
 
 ```bash
 mkdir -p modal_runs
 .venv-modal/bin/modal volume get parameter-golf-data runs/<run_id> ./modal_runs/<run_id>
 ```
+
+**If `volume get` says `No such file or directory`:** the run likely used an **older** Modal definition that wrote logs and checkpoints under **`/root`** (container disk). That data is **not** on `parameter-golf-data` and is **gone** after the container exits. Recover by copying **function logs / stdout** from the Modal app run page (e.g. **Go to function logs**). Then `git pull` and re-run with the current `scripts/modal_train_lawa.py` (uses `/vol/runs/<run_id>` + `chdir` + `commit`); the log line `[modal] volume path '/vol/runs/…' after train: [...]` confirms files landed on the volume.
 
 Then bundle from that directory:
 
@@ -308,3 +317,5 @@ Add concrete machine images and commands here once you standardize on a SKU.
 | Modal build very slow once | Compiling CUDA extensions (e.g. FA Hopper). Cached until you change an earlier image layer — see [Modal images](https://modal.com/docs/guide/images). |
 | SCP fails on RunPod | Use **`runpodctl send/receive`** or full SSH — see links above. |
 | Empty folder after Modal run | Ensure training finished; check `modal volume ls parameter-golf-data runs/` — volume writes need **`commit()`** (handled in our scripts). |
+| `modal volume get` → **No such file or directory** for `runs/<id>` | **`runs/`** was never created: old deploy wrote to **`/root`** only (ephemeral). List root: `modal volume ls parameter-golf-data`. Recover from **Modal UI logs**; redeploy latest scripts. |
+| **`Timed out waiting for final app logs`** (local CLI) | Often harmless; remote job may still finish. Confirm in the Modal **app run** page. |

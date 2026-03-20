@@ -40,6 +40,7 @@ def train(
 ) -> int:
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
+    os.chdir(run_dir)
     env = {
         **os.environ,
         "DATA_PATH": f"/vol/{data_root}",
@@ -56,6 +57,10 @@ def train(
             check=False,
         ).returncode
     finally:
+        try:
+            print(f"[modal] volume path {run_dir!r} after train: {sorted(os.listdir(run_dir))[:30]}")
+        except OSError as e:
+            print(f"[modal] could not list {run_dir!r}: {e}")
         DATA_VOLUME.commit()
 
 

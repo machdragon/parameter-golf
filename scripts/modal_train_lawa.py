@@ -44,6 +44,8 @@ image = (
 def train(run_id: str, extra_env: Dict[str, str]) -> int:
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
+    # Belt-and-suspenders: some stacks only respect process CWD (not subprocess cwd).
+    os.chdir(run_dir)
     env = {
         **os.environ,
         # Paths
@@ -76,6 +78,12 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
         )
         return result.returncode
     finally:
+        try:
+            names = sorted(os.listdir(run_dir))
+            tail = " …" if len(names) > 30 else ""
+            print(f"[modal] volume path {run_dir!r} after train: {names[:30]}{tail}")
+        except OSError as e:
+            print(f"[modal] could not list {run_dir!r}: {e}")
         DATA_VOLUME.commit()
 
 

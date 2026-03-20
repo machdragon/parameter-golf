@@ -52,6 +52,7 @@ def train(
     # Persist logs + final_model* on the Modal Volume (train_gpt uses cwd).
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
+    os.chdir(run_dir)
     env = {
         "DATA_PATH": f"/vol/{data_root}",
         "TOKENIZER_PATH": f"/vol/{tokenizer_relpath}",
@@ -69,6 +70,10 @@ def train(
         )
         return result.returncode
     finally:
+        try:
+            print(f"[modal] volume path {run_dir!r} after train: {sorted(os.listdir(run_dir))[:30]}")
+        except OSError as e:
+            print(f"[modal] could not list {run_dir!r}: {e}")
         DATA_VOLUME.commit()
 
 
