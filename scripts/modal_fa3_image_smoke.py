@@ -14,7 +14,7 @@ Prerequisite: ./scripts/modal_sync_data.sh (same Modal account).
 If a long training run is in progress, wait for it to finish (or use another workspace)
 so you do not compete for H100 quota.
 
-Image definition: `modal_image_fa3_pytorch.py` (Conda pip via `run_commands`).
+Image definition: `modal_image_fa3_pytorch.py` (`uv_pip_install` on the shared registry image).
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-20_LAWA_KURE_R2_LoRATTT/trai
 app = modal.App("parameter-golf-kure-r2-ttt")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
-# FA3 image: see modal_image_fa3_pytorch.py (Conda pip — avoids PEP 668 on pytorch hub images).
+# FA3 image: see modal_image_fa3_pytorch.py (`uv_pip_install` on the shared PyTorch base).
 image = (
     pytorch_fa3_hopper_image()
     .add_local_python_source("modal_train_volume_check")
