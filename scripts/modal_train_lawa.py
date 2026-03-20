@@ -15,6 +15,13 @@ image = (
         "zstandard",
         "flash-attn>=2.7",
     )
+    .run_commands(
+        # Build FA3 Hopper kernels (provides flash_attn_interface)
+        "git clone --depth 1 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention",
+        "cd /tmp/flash-attention/hopper && python setup.py install",
+        "rm -rf /tmp/flash-attention",
+        gpu="H100",
+    )
     .add_local_file(
         "records/track_10min_16mb/lawa_frontier/train_gpt.py",
         remote_path="/root/train_gpt.py",
