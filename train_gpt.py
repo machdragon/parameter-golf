@@ -706,6 +706,11 @@ class GPT(nn.Module):
     def _init_weights(self) -> None:
         if self.tie_embeddings:
             nn.init.normal_(self.tok_emb.weight, mean=0.0, std=self.tied_embed_init_std)
+            # Overtone init: shape embedding spectrum to power-law decay (like guitar harmonics)
+            with torch.no_grad():
+                U, S, V = torch.linalg.svd(self.tok_emb.weight.data, full_matrices=False)
+                target_S = S[0] * (1.0 / torch.arange(1, S.shape[0] + 1, dtype=S.dtype)) ** 0.5
+                self.tok_emb.weight.data = (U * target_S[None, :]) @ V
         for module in self.modules():
             if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
                 nn.init.zeros_(module.weight)
