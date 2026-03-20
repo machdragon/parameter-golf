@@ -135,6 +135,19 @@ For dataset export, tokenizer export, and docs-cache rebuild instructions, see [
 
 Evaluation will be in the RunPod environment with all packages installed. `requirements.txt` is provided as a reference if you want to self-setup.
 
+#### Efficiency: Modal vs RunPod (cold starts & credits)
+
+**RunPod — official [Parameter Golf template](https://console.runpod.io/hub/template/parameter-golf?id=y5cejece4j)** ships **`runpod/parameter-golf:latest`**: Python, PyTorch, and challenge dependencies are **already in the image**. You are **not** rebuilding a Docker image or compiling FlashAttention on every pod start; you mostly pay **GPU hourly** while the pod runs. To save time and disk I/O on new pods:
+
+- Prefer a **Network Volume** (shared, survives pod stop) for `parameter-golf/` and `data/` so you **don’t re-clone and re-download** FineWeb every time — see [RunPod: create network volumes](https://docs.runpod.io/pods/storage/create-network-volumes) and the template’s storage options.
+- While iterating, use `python3 data/cached_challenge_fineweb.py --variant sp1024 --train-shards N` with small `N` before pulling the full shard set.
+
+**Modal** (see [Modal images](https://modal.com/docs/guide/images)) builds a **remote container image** from your definition. The first build (or any build after you change an **earlier** image step) can take a long time if you **compile CUDA extensions** (e.g. Hopper FlashAttention in `scripts/modal_train_lawa.py`). After a successful build, Modal **caches** that image layer, so later runs are much faster **as long as** you don’t invalidate layers above the compile (reorder steps so **code mounts** and frequently edited files come **last**; keep `pip_install` / `run_commands` stable when possible). For data, use a **Modal Volume** and sync once (e.g. `scripts/modal_sync_data.sh`) instead of baking datasets into the image.
+
+**Rule of thumb:** Use **RunPod + official image** for runs that must match **submission / eval** (same stack as the challenge). Use **Modal** for **remote GPU smoke tests** without managing pods; expect **one heavy image build** when the image definition or compile step changes.
+
+Step-by-step commands, bundling results, and `runpodctl` / Modal volume download: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+
 ## FAQ
 
 **What exactly counts toward the 16MB artifact size?**

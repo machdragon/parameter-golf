@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -30,6 +31,10 @@ PATTERNS = {
     "total_int8": re.compile(r"^Total submission size int8\+zlib: (?P<bytes>\d+) bytes$"),
     "final_exact": re.compile(
         rf"^final_int8_zlib_roundtrip_exact val_loss:(?P<val_loss>{NUM}) val_bpb:(?P<val_bpb>{NUM})$"
+    ),
+    "final_ttt": re.compile(
+        rf"^final_int8_ttt_lora val_loss:(?P<val_loss>{NUM}) val_bpb:(?P<val_bpb>{NUM}) "
+        rf"eval_time:(?P<eval_time_ms>\d+)ms$"
     ),
 }
 
@@ -150,21 +155,53 @@ def parse_log(path: Path) -> dict[str, object]:
             elif key == "final_exact":
                 result["final_int8_zlib_roundtrip_exact_val_loss"] = float(groups["val_loss"])
                 result["final_int8_zlib_roundtrip_exact_val_bpb"] = float(groups["val_bpb"])
+            elif key == "final_ttt":
+                result["final_int8_ttt_lora_val_loss"] = float(groups["val_loss"])
+                result["final_int8_ttt_lora_val_bpb"] = float(groups["val_bpb"])
+                result["final_int8_ttt_lora_eval_time_ms"] = int(groups["eval_time_ms"])
     return result
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: extract_run_metrics.py <log.txt> [<log.txt> ...]", file=sys.stderr)
+    parser = argparse.ArgumentParser(description="Extract metrics from Parameter Golf training logs.")
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        type=Path,
+        help="Log file(s), or a run directory containing logs/*.txt",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Write a single JSON file (requires exactly one log path)",
+    )
+    args = parser.parse_args(argv[1:])
+
+    if not args.paths:
+        parser.print_help(sys.stderr)
+        return 2
+    if args.output is not None and len(args.paths) != 1:
+        print("error: -o requires exactly one log path", file=sys.stderr)
         return 2
 
-    for arg in argv[1:]:
-        path = Path(arg)
+    expanded: list[Path] = []
+    for path in args.paths:
         if path.is_dir():
-            candidates = sorted(path.glob("logs/*.txt"))
-            for candidate in candidates:
-                print(json.dumps(parse_log(candidate), sort_keys=True))
-            continue
+            expanded.extend(sorted(path.glob("logs/*.txt")))
+        else:
+            expanded.append(path)
+
+    if not expanded:
+        print("error: no log files found", file=sys.stderr)
+        return 2
+
+    if args.output is not None:
+        data = parse_log(expanded[0])
+        args.output.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return 0
+
+    for path in expanded:
         print(json.dumps(parse_log(path), sort_keys=True))
     return 0
 

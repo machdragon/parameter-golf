@@ -4,11 +4,17 @@ from typing import Dict
 
 import modal
 
+# Training script baked into the image (path relative to repo root).
+# Default: LAWA frontier record on this fork. Override for other records.
+LOCAL_TRAIN_GPT = "records/track_10min_16mb/lawa_frontier/train_gpt.py"
+
 app = modal.App("parameter-golf-lawa-frontier")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel")
+    # Base image has no git; required before cloning flash-attention for FA3 Hopper build.
+    .apt_install("git")
     .pip_install(
         "numpy",
         "sentencepiece",
@@ -23,7 +29,7 @@ image = (
         gpu="H100",
     )
     .add_local_file(
-        "records/track_10min_16mb/lawa_frontier/train_gpt.py",
+        LOCAL_TRAIN_GPT,
         remote_path="/root/train_gpt.py",
     )
 )
@@ -36,6 +42,8 @@ image = (
     volumes={"/vol": DATA_VOLUME},
 )
 def train(run_id: str, extra_env: Dict[str, str]) -> int:
+    run_dir = f"/vol/runs/{run_id}"
+    os.makedirs(run_dir, exist_ok=True)
     env = {
         **os.environ,
         # Paths
@@ -54,17 +62,21 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
         # Overrides
         **extra_env,
     }
-    result = subprocess.run(
-        [
-            "torchrun",
-            "--nproc_per_node=8",
-            "/root/train_gpt.py",
-        ],
-        env=env,
-        text=True,
-        check=False,
-    )
-    return result.returncode
+    try:
+        result = subprocess.run(
+            [
+                "torchrun",
+                "--nproc_per_node=8",
+                "/root/train_gpt.py",
+            ],
+            env=env,
+            text=True,
+            cwd=run_dir,
+            check=False,
+        )
+        return result.returncode
+    finally:
+        DATA_VOLUME.commit()
 
 
 @app.local_entrypoint()
@@ -87,3 +99,7 @@ def main(
     if rc != 0:
         raise RuntimeError(f"Remote training failed with exit code {rc}")
     print("Training completed successfully.")
+    print(
+        f"Artifacts on Modal volume `parameter-golf-data`: runs/{run_id}/ "
+        f"(download with: modal volume get parameter-golf-data runs/{run_id} ./modal_runs/{run_id})"
+    )
