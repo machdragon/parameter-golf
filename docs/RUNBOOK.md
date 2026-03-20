@@ -13,6 +13,8 @@ git worktree add ../parameter-golf-second main
 
 ## RunPod — optimized next run (3 commands)
 
+**First time with a [network volume](#runpod-network-volume-setup)?** Seed `/workspace` once (clone + FineWeb), then use the steps below on every pod.
+
 From repo root on the pod (e.g. `cd /workspace/parameter-golf` after `git pull`):
 
 1. **Preflight** (Python/torch/CUDA, GPU count, dataset + tokenizer):
@@ -60,11 +62,98 @@ Use a **unique `RUN_ID`** per prod run (e.g. `prod_8xh100_20260320`).
 
 Official template: **[Parameter Golf on RunPod Hub](https://console.runpod.io/hub/template/parameter-golf?id=y5cejece4j)** — image `runpod/parameter-golf:latest` (Python, PyTorch, deps pre-installed).
 
-### Faster iteration
+### RunPod network volume setup
 
-- Attach a **[network volume](https://docs.runpod.io/pods/storage/create-network-volumes)** so `/workspace` (or your clone path) survives pod stops — avoid re-clone + re-download.
-- Small data while debugging:  
-  `python3 data/cached_challenge_fineweb.py --variant sp1024 --train-shards N`
+You create and attach volumes in the **[RunPod console](https://console.runpod.io)** (we cannot do that from this repo).
+
+A **network volume** is separate billable storage (~[\$0.07/GB/mo for the first 1 TB](https://docs.runpod.io/storage/network-volumes)) that **persists when pods are deleted**. When attached to a Pod, it **replaces the normal volume disk** and is mounted at **`/workspace`**. That way you **pay once** (time + egress) to download FineWeb, then **later pods** mostly run **training only**.
+
+Constraints from RunPod ([network volumes](https://docs.runpod.io/storage/network-volumes), [storage options](https://docs.runpod.io/pods/storage/sync-volumes)):
+
+- **Secure Cloud** pods only (community cloud may not offer network volumes).
+- Attach the volume **only when deploying** the Pod — **not** after the fact (no hot-attach).
+- Pick a **datacenter** for the volume; GPU SKUs you can choose may **depend on that region**.
+
+#### Step 1 — Create the volume
+
+1. Open RunPod **[Storage](https://console.runpod.io/user/storage)** (or **New Network Volume** from the product UI).
+2. Click **New Network Volume** / **Create Network Volume**.
+3. Choose a **datacenter** (note it — use the **same** region when picking GPUs).
+4. Set a **name** (e.g. `parameter-golf-data`) and **size** (e.g. **100 GB+** if you want full `sp1024` shards + repo + checkpoints; size can **increase** later, not shrink).
+5. Create the volume.
+
+Optional **API** (replace `RUNPOD_API_KEY` and pick a valid `dataCenterId` from their API/docs):
+
+```bash
+curl --request POST \
+  --url https://rest.runpod.io/v1/networkvolumes \
+  --header 'Authorization: Bearer RUNPOD_API_KEY' \
+  --header 'Content-Type: application/json' \
+  --data '{"name":"parameter-golf-data","size":100,"dataCenterId":"US-KS-2"}'
+```
+
+See [POST /networkvolumes](https://docs.runpod.io/api-reference/network-volumes/POST/networkvolumes).
+
+#### Step 2 — Deploy a Pod with that volume
+
+1. Go to **[Deploy a Pod](https://console.runpod.io/deploy)**.
+2. Under storage, choose **Network volume** and select the volume you created (this mounts it as **`/workspace`**).
+3. Select **GPU** (must be available in a datacenter compatible with the volume).
+4. Use template **[Parameter Golf](https://console.runpod.io/hub/template/parameter-golf?id=y5cejece4j)** / image `runpod/parameter-golf:latest` as usual.
+5. Deploy.
+
+#### Step 3 — One-time seed: clone + FineWeb onto the volume
+
+On the pod (SSH or web terminal), **`/workspace` is your persistent disk**. Populate it once:
+
+**Option A — curl installer (no prior clone):**
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/machdragon/parameter-golf/main/scripts/runpod_seed_workspace.sh" | bash
+```
+
+Use a **fork** if needed:
+
+```bash
+export GIT_REPO_URL=https://github.com/YOUR_USER/parameter-golf.git
+curl -fsSL "https://raw.githubusercontent.com/machdragon/parameter-golf/main/scripts/runpod_seed_workspace.sh" | bash
+```
+
+Small subset while testing (saves download time):
+
+```bash
+export TRAIN_SHARDS=1
+curl -fsSL "https://raw.githubusercontent.com/machdragon/parameter-golf/main/scripts/runpod_seed_workspace.sh" | bash
+```
+
+**Option B — manual:**
+
+```bash
+cd /workspace
+git clone https://github.com/machdragon/parameter-golf.git
+cd parameter-golf
+python3 data/cached_challenge_fineweb.py --variant sp1024   # add --train-shards N if desired
+```
+
+#### Step 4 — Later pods (same volume)
+
+Deploy a **new** Pod, attach the **same** network volume again. Then:
+
+```bash
+cd /workspace/parameter-golf
+git pull
+./scripts/runpod_preflight.sh 8
+./scripts/runpod_train.sh 8x --run-id prod_8xh100_$(date -u +%Y%m%d_%H%MZ)
+```
+
+No re-download if `data/` is already on the volume.
+
+**Optional:** [S3-compatible API](https://docs.runpod.io/storage/s3-api) can upload data **without** a running GPU pod to reduce wasted GPU time (advanced).
+
+### Faster iteration (summary)
+
+- **Network volume** = persistent `/workspace`; see above.
+- **Smaller data** while debugging: `python3 data/cached_challenge_fineweb.py --variant sp1024 --train-shards N` or `TRAIN_SHARDS=N` with `runpod_seed_workspace.sh`.
 
 ### Manual env (equivalent to `runpod_train.sh`)
 
