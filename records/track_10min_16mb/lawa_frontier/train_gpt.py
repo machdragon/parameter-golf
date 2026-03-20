@@ -654,6 +654,7 @@ class BigramHashEmbedding(nn.Module):
         self.proj = CastedLinear(bigram_dim, model_dim, bias=False) if bigram_dim != model_dim else None
         if self.proj is not None:
             nn.init.zeros_(self.proj.weight)
+            self.proj._zero_init = True
         self.scale = nn.Parameter(torch.tensor(0.05, dtype=torch.float32))
 
     def bigram_hash(self, tokens: Tensor) -> Tensor:
@@ -884,7 +885,7 @@ def eval_val_sliding(
     total_tokens = val_tokens.numel() - 1
 
     window_starts = [ws for ws in range(0, total_tokens, stride)
-                     if min(ws + seq_len, total_tokens) - ws >= 1]
+                     if ws + seq_len <= total_tokens]
     total_windows = len(window_starts)
 
     my_s = (total_windows * rank) // world_size
