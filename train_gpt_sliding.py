@@ -130,8 +130,9 @@ def eval_sliding_roundtrip(
         return gpt_forward_logits(base_model, input_ids)
 
     compiled_fn = torch.compile(_logits_fn)
-    # Warmup compile with a dummy batch
-    dummy = val_tokens[:seq_len].unsqueeze(0).to(device=device, dtype=torch.int64)
+    # Warmup compile with a dummy batch matching eval_val_sliding's padded batch size
+    eval_batch_seqs = 256
+    dummy = torch.zeros(eval_batch_seqs, seq_len, dtype=torch.int64, device=device)
     with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         compiled_fn(dummy)
 
