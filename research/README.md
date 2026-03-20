@@ -6,7 +6,7 @@ This tree is **not** part of the official [Parameter Golf](https://github.com/op
 
 | Path | Purpose |
 |------|---------|
-| [`local/case_matrix_v3_full.json`](local/case_matrix_v3_full.json) | Hypothesis lanes (from your prior ARC matrix); reference only |
+| [`../arc_inputs/case_matrix_v3_full.json`](../arc_inputs/case_matrix_v3_full.json) | Full hypothesis grid (canonical); see also [`arc_inputs/README.md`](../arc_inputs/README.md) |
 | [`lane_env_presets.json`](lane_env_presets.json) | **Env-only** presets mappable to upstream `train_gpt.py` |
 | [`scripts/quick_rank_lanes.py`](scripts/quick_rank_lanes.py) | Run baseline + presets → JSON/CSV ranking |
 | [`../scripts/quick_harness.sh`](../scripts/quick_harness.sh) | Same quick gate as **parameter-golf-old**: baseline/candidate + JSON snapshots |

@@ -93,6 +93,11 @@ class Hyperparameters:
     ttt_eval_seq_len = int(os.environ.get("TTT_EVAL_SEQ_LEN", 1024))
     ttt_batch_size = int(os.environ.get("TTT_BATCH_SIZE", 64))
 
+    # torch.compile (optional; `scripts/quick_harness.sh` sets USE_COMPILE=0 like parameter-golf-old).
+    use_compile = bool(int(os.environ.get("USE_COMPILE", "1")))
+    compile_fullgraph = bool(int(os.environ.get("COMPILE_FULLGRAPH", "1")))
+    compile_dynamic = bool(int(os.environ.get("COMPILE_DYNAMIC", "0")))
+
 # -----------------------------
 # MUON OPTIMIZER 
 # -----------------------------
@@ -963,7 +968,12 @@ def main() -> None:
 
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
-    zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)
+    if args.use_compile:
+        zeropower_via_newtonschulz5 = torch.compile(
+            zeropower_via_newtonschulz5,
+            dynamic=args.compile_dynamic,
+            fullgraph=args.compile_fullgraph,
+        )
 
     # -----------------------------
     # DISTRIBUTED + CUDA SETUP
@@ -993,10 +1003,14 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     from torch.backends.cuda import enable_cudnn_sdp, enable_flash_sdp, enable_math_sdp, enable_mem_efficient_sdp
 
-    enable_cudnn_sdp(False)
-    enable_flash_sdp(True)
-    enable_mem_efficient_sdp(False)
-    enable_math_sdp(False)
+    sdp_cudnn = bool(int(os.environ.get("SDP_CUDNN", "0")))
+    sdp_flash = bool(int(os.environ.get("SDP_FLASH", "1")))
+    sdp_mem_efficient = bool(int(os.environ.get("SDP_MEM_EFFICIENT", "0")))
+    sdp_math = bool(int(os.environ.get("SDP_MATH", "0")))
+    enable_cudnn_sdp(sdp_cudnn)
+    enable_flash_sdp(sdp_flash)
+    enable_mem_efficient_sdp(sdp_mem_efficient)
+    enable_math_sdp(sdp_math)
 
     logfile = None
     if master_process:
@@ -1072,8 +1086,20 @@ def main() -> None:
         if isinstance(module, Rotary):
             module.inv_freq.data = module.inv_freq.data.float()
     restore_low_dim_params_to_fp32(base_model)
-    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
+    compiled_model = (
+        torch.compile(
+            base_model,
+            dynamic=args.compile_dynamic,
+            fullgraph=args.compile_fullgraph,
+        )
+        if args.use_compile
+        else base_model
+    )
     model: nn.Module = DDP(compiled_model, device_ids=[local_rank], broadcast_buffers=False) if distributed else compiled_model
+    log0(
+        f"compile:enabled={args.use_compile} fullgraph={args.compile_fullgraph} dynamic={args.compile_dynamic} "
+        f"sdp cudnn={int(sdp_cudnn)} flash={int(sdp_flash)} mem_efficient={int(sdp_mem_efficient)} math={int(sdp_math)}"
+    )
 
     # Optimizer split:
     # - token embedding (Adam) uses EMBED_LR
@@ -1225,6 +1251,8 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
+            if last_step:
+                log0(f"quick_metric step:{step} val_bpb:{val_bpb:.8f} train_time_ms:{training_time_ms:.0f}")
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 

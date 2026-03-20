@@ -7,9 +7,14 @@
       "WARMUP_STEPS": "0",
       "VAL_LOSS_EVERY": "0",
       "TRAIN_LOG_EVERY": "99999",
-      "MAX_WALLCLOCK_SECONDS": "180"
+      "MAX_WALLCLOCK_SECONDS": "180",
+      "USE_COMPILE": "0",
+      "SDP_CUDNN": "0",
+      "SDP_FLASH": "1",
+      "SDP_MEM_EFFICIENT": "0",
+      "SDP_MATH": "0"
     },
-    "comment": "Short training for screening. Val still uses full val split at end unless you patch train_gpt.py."
+    "comment": "Short screening; USE_COMPILE=0 matches scripts/quick_harness.sh defaults. Full val + int8/TTT tail still run in stock train_gpt.py."
   },
   "presets": [
     {

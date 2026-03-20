@@ -191,6 +191,12 @@ Non-record submissions should be made in the same fashion as SOTA records, as de
 
 The `train_gpt.py` and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but the best models should stay in the `/records` folder.
 
+## Local experiment tooling (this fork)
+
+- **Record → PR map:** [`docs/RECORDS_PR_MAP.md`](docs/RECORDS_PR_MAP.md) — which merged PRs added each `records/track_10min_16mb/` folder, plus notes on [PR #124](https://github.com/openai/parameter-golf/pull/124) (sliding-window final window) and optional sweep tooling.
+- **Wave-1 sweep + log parsing:** [`docs/experiment_workflow.md`](docs/experiment_workflow.md), [`scripts/run_wave1_screen.sh`](scripts/run_wave1_screen.sh), [`scripts/extract_run_metrics.py`](scripts/extract_run_metrics.py) (vendored from [GLDRoger/parameter-golf#13](https://github.com/openai/parameter-golf/pull/13); see [`AGENTS.md`](AGENTS.md) for log-parser caveats).
+- Quick smoke runs may still use [`scripts/quick_harness.sh`](scripts/quick_harness.sh) if present.
+
 ## Support
 
 
