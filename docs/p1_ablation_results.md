@@ -13,6 +13,36 @@ Companion to [`docs/p1_lane_knob_audit.md`](p1_lane_knob_audit.md) and the arc m
 | **lane_9** | value_from_x0 | **Blocked** | — | No `VALUE_FROM_X0_*` in trainer. |
 | **lane_10** | mirrored skip | **Blocked** | — | No `MIRRORED_SKIP_*` in trainer. |
 
+## Requested lane snapshot (lane_5, lane_1, lane_7)
+
+### lane_5 (quick harness)
+
+Primary artifact: `logs/quick_harness/lane5_quick_gate_20260319_191730.json`
+
+- Baseline quick metric: `val_bpb=3.33682083`, `train_time_ms=49191`
+- Candidates tested: `MDL_only`, `sparsity_only`, `full`
+- Result: **all failed** quick gate (`bpb_improved=false` for every candidate)
+- Best (still fail): `sparsity_only` with `val_bpb=3.33949079`
+
+Sweep artifact: `logs/quick_harness/lane5_comp_weight_sweep_20260319_194735.json`
+
+- Weights tested: `0.0025`, `0.005`, `0.01`
+- Result: **all failed** (worse `val_bpb` vs baseline; some also over runtime limit)
+
+### lane_1 (P1)
+
+- Status: **Blocked / not runnable**
+- Reason: no recurrence + training-time LoRA + gating env knobs in current [`train_gpt.py`](../train_gpt.py)
+- Result artifact: none (no runnable quick-gate candidate in current trainer)
+
+### lane_7 (P1 LAWA)
+
+- Script exists: [`scripts/run_p1_lane7_lawa_quick_gate.sh`](../scripts/run_p1_lane7_lawa_quick_gate.sh)
+- Implementation exists: [`train_gpt_lawa.py`](../train_gpt_lawa.py)
+- Summary JSON: `logs/quick_harness/p1_lane7_lawa_quick_gate_20260319_225953.json`
+- Result: **PASS** (baseline val_bpb=9.5637, candidate val_bpb=5.1552)
+- Promoted to staging profile default (`LAWA_ENABLED=1`, `LAWA_MODE=ema`, `LAWA_EMA_DECAY=0.999`)
+
 ## lane_2 run artifact (2026-03-20)
 
 - Summary JSON: `logs/quick_harness/p1_lane2_kv_quick_gate_20260319_201836.json`

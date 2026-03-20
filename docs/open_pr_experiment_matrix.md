@@ -7,6 +7,21 @@ Concrete run sheet split into:
 
 This matrix is scoped to the `10min_16mb` track.
 
+## Automation
+
+Use the launcher script:
+
+```bash
+# phase 0 + phase 1 (default)
+./scripts/run_open_pr_matrix.sh --fetch-open-scripts
+
+# phase 0 only, preview commands
+./scripts/run_open_pr_matrix.sh --phase0 --dry-run
+
+# phase 1 only
+./scripts/run_open_pr_matrix.sh --phase1 --fetch-open-scripts
+```
+
 ## Contract
 
 - Hardware: `8xH100`
