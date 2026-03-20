@@ -10,6 +10,7 @@ This tree is **not** part of the official [Parameter Golf](https://github.com/op
 | [`lane_env_presets.json`](lane_env_presets.json) | **Env-only** presets mappable to upstream `train_gpt.py` |
 | [`scripts/quick_rank_lanes.py`](scripts/quick_rank_lanes.py) | Run baseline + presets → JSON/CSV ranking |
 | [`../scripts/quick_harness.sh`](../scripts/quick_harness.sh) | Same quick gate as **parameter-golf-old**: baseline/candidate + JSON snapshots |
+| [`../scripts/run_lane5_quick_gate.sh`](../scripts/run_lane5_quick_gate.sh) | Lane_5 quick-gate runner: baseline + `MDL_only` + `sparsity_only` + `full` |
 | [`WINNING_PATTERNS.md`](WINNING_PATTERNS.md) | Themes from top `records/**/README.md` in this repo |
 | [`autoresearch_sidecar.md`](autoresearch_sidecar.md) | Using [karpathy/autoresearch](https://github.com/karpathy/autoresearch) for ideas only |
 | [`PR_CHECKLIST.md`](PR_CHECKLIST.md) | Checklist for a real leaderboard PR |
@@ -40,6 +41,17 @@ python3 research/scripts/quick_rank_lanes.py \
 ```
 
 Results go to `research/sweeps/output/` (gitignored).
+
+5. Lane_5 quick gate (baseline + minimal ablations):
+
+```bash
+cd /path/to/parameter-golf
+export DATA_PATH=./data/datasets/fineweb10B_sp1024_1train
+export TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model
+./scripts/run_lane5_quick_gate.sh
+```
+
+This writes per-ablation snapshots/logs and a summary JSON under `logs/quick_harness/`.
 
 ## Caveats
 

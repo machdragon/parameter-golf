@@ -187,6 +187,23 @@ This matters because the trainer log intentionally contains only a subset of the
 - **`SKIP_POST_TRAIN_EVAL=1`**: skip **both** int8 roundtrip validation and TTT (fastest smoke; no `final_int8_zlib_roundtrip_exact` in the log).
 - **`VAL_BATCH_SIZE`**: smaller values speed up validation but bias `val_bpb`; use for screening only.
 
+### Lane_5 quick-gate runner
+
+Use `scripts/run_lane5_quick_gate.sh` to run a fixed lane_5 quick-gate bundle:
+
+- refresh baseline (`lane_5` penalties unset)
+- run `MDL_only`, `sparsity_only`, and `full` candidates
+- persist non-overwriting candidate artifacts (`candidate_<ablation>.json` and `candidate_<ablation>.latest.log`)
+- write one summary JSON (`logs/quick_harness/lane5_quick_gate_<timestamp>.json`)
+
+Example:
+
+```bash
+export DATA_PATH=./data/datasets/fineweb10B_sp1024_1train
+export TOKENIZER_PATH=./data/tokenizers/fineweb_1024_bpe.model
+./scripts/run_lane5_quick_gate.sh
+```
+
 ## Remote Usage
 
 From the repository root on a CUDA machine:
