@@ -1,10 +1,16 @@
+"""
+Modal: 8× H100 training with root train_gpt.py (no FlashAttention source build).
+
+For record-specific scripts (e.g. LAWA + FA3 Hopper), use modal_train_lawa.py instead.
+"""
+
 import os
 import subprocess
 from typing import Dict
 
 import modal
 
-app = modal.App("parameter-golf-train-h100")
+app = modal.App("parameter-golf-train-8xh100")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 image = (
@@ -25,62 +31,42 @@ image = (
 )
 
 
-@app.function(image=image, gpu="H100:1", timeout=60 * 60)
-def gpu_info() -> str:
-    return subprocess.check_output(
-        [
-            "bash",
-            "-lc",
-            "nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader",
-        ],
-        text=True,
-    ).strip()
-
-
-@app.function(
-    image=image,
-    gpu="H100:1",
-    timeout=6 * 60 * 60,
-    volumes={"/vol": DATA_VOLUME},
-)
+@app.function(image=image, gpu="H100:8", timeout=2 * 60 * 60, volumes={"/vol": DATA_VOLUME})
 def train(
     data_root: str,
     tokenizer_relpath: str,
     run_id: str,
     extra_env: Dict[str, str],
 ) -> int:
-    # Persist logs + final_model* on the Modal Volume (train_gpt uses cwd).
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
     env = {
+        **os.environ,
         "DATA_PATH": f"/vol/{data_root}",
         "TOKENIZER_PATH": f"/vol/{tokenizer_relpath}",
         "RUN_ID": run_id,
         **extra_env,
     }
-    command = "python /root/train_gpt.py"
     try:
-        result = subprocess.run(
-            ["bash", "-lc", command],
+        return subprocess.run(
+            ["torchrun", "--nproc_per_node=8", "/root/train_gpt.py"],
+            env=env,
             text=True,
-            env={**os.environ, **env},
             cwd=run_dir,
             check=False,
-        )
-        return result.returncode
+        ).returncode
     finally:
         DATA_VOLUME.commit()
 
 
 @app.local_entrypoint()
 def main(
-    run_id: str = "modal-h100-run",
+    run_id: str = "modal-8x-run",
     data_root: str = "datasets/fineweb10B_sp1024",
     tokenizer_relpath: str = "tokenizers/fineweb_1024_bpe.model",
     iterations: int = 20000,
     max_wallclock_seconds: float = 600.0,
 ) -> None:
-    print("Remote GPU:", gpu_info.remote())
     rc = train.remote(
         data_root=data_root,
         tokenizer_relpath=tokenizer_relpath,
