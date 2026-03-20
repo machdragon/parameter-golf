@@ -1,0 +1,9 @@
+{
+  "track": "10min_16mb",
+  "date": "2026-03-20",
+  "name": "LAWA_KURE_R2_LoRATTT",
+  "description": "LAWA parallel EMA + KURE/R2 quant reg + tanh reparam + causal LoRA TTT",
+  "base": "PR #201 (LAWA-EMA + Int6 + Overtone + MLP3x)",
+  "val_bpb": null,
+  "notes": "Placeholder — run eval to populate"
+}
