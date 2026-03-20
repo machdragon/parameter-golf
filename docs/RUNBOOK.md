@@ -254,6 +254,8 @@ python3 -m venv .venv-modal
 
 If `fineweb_1024_bpe.model` is missing on the volume, you will get **`Not found: "/vol/tokenizers/..."`** during training until you sync.
 
+If **`modal volume put`** errors with **`already exists`** on dataset shards, a previous sync already uploaded them; **re-run `./scripts/modal_sync_data.sh`** — it continues and **always re-uploads the tokenizer with `--force`**. To overwrite all shards: **`MODAL_SYNC_FORCE=1 ./scripts/modal_sync_data.sh`**.
+
 ### 1× H100 — baseline `train_gpt.py`
 
 ```bash
