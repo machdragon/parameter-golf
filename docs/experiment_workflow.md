@@ -179,6 +179,14 @@ The parser at `scripts/extract_run_metrics.py` emits one JSON object per run by 
 
 This matters because the trainer log intentionally contains only a subset of the full experiment configuration.
 
+## Quick harness and post-train eval (`train_gpt.py`)
+
+[`scripts/quick_harness.sh`](../scripts/quick_harness.sh) defaults **`SKIP_TTT_EVAL=1`** so short runs do not spend wall time on the full **`final_int8_ttt_lora`** evaluation (often 10–20+ minutes). The quick gate still uses the **`quick_metric`** line (pre–int8-quant validation `val_bpb` + `train_time_ms`).
+
+- **`SKIP_TTT_EVAL=0`**: run the full TTT LoRA eval (competition-style tail).
+- **`SKIP_POST_TRAIN_EVAL=1`**: skip **both** int8 roundtrip validation and TTT (fastest smoke; no `final_int8_zlib_roundtrip_exact` in the log).
+- **`VAL_BATCH_SIZE`**: smaller values speed up validation but bias `val_bpb`; use for screening only.
+
 ## Remote Usage
 
 From the repository root on a CUDA machine:

@@ -98,6 +98,15 @@ class Hyperparameters:
     compile_fullgraph = bool(int(os.environ.get("COMPILE_FULLGRAPH", "1")))
     compile_dynamic = bool(int(os.environ.get("COMPILE_DYNAMIC", "0")))
 
+    # Quick harness / eval tail: skip expensive post-train metrics (see scripts/quick_harness.sh).
+    skip_ttt_eval = bool(int(os.environ.get("SKIP_TTT_EVAL", "0")))
+    skip_post_train_eval = bool(int(os.environ.get("SKIP_POST_TRAIN_EVAL", "0")))
+
+    # Lane 5 (arc_inputs/case_matrix): compression-aware training; all default off.
+    compression_objective_weight = float(os.environ.get("COMPRESSION_OBJECTIVE_WEIGHT", "0.0"))
+    mdl_penalty_lambda = float(os.environ.get("MDL_PENALTY_LAMBDA", "0.0"))
+    structural_sparsity_lambda = float(os.environ.get("STRUCTURAL_SPARSITY_LAMBDA", "0.0"))
+
 # -----------------------------
 # MUON OPTIMIZER 
 # -----------------------------
@@ -748,6 +757,32 @@ class GPT(nn.Module):
         return F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), target_ids.reshape(-1), reduction="mean")
 
 
+def lane5_compression_auxiliary_loss(model: GPT, args: Hyperparameters) -> Tensor:
+    """STE fake-int8 + optional L1 / L2 penalties on 2D block weights (lane_5). Defaults: all off."""
+    if (
+        args.compression_objective_weight <= 0.0
+        and args.mdl_penalty_lambda <= 0.0
+        and args.structural_sparsity_lambda <= 0.0
+    ):
+        return torch.zeros((), device=next(model.parameters()).device, dtype=torch.float32)
+    device = next(model.parameters()).device
+    total = torch.zeros((), device=device, dtype=torch.float32)
+    for name, p in model.blocks.named_parameters():
+        if p.ndim != 2 or any(pat in name for pat in CONTROL_TENSOR_NAME_PATTERNS):
+            continue
+        w = p.float()
+        if args.compression_objective_weight > 0.0:
+            scale = w.abs().max().clamp(min=1e-8) / 127.0
+            w_q = (w / scale).round().clamp(-127.0, 127.0) * scale
+            ste_mse = (w - w_q.detach()).pow(2).mean()
+            total = total + args.compression_objective_weight * ste_mse
+        if args.mdl_penalty_lambda > 0.0:
+            total = total + args.mdl_penalty_lambda * w.pow(2).mean()
+        if args.structural_sparsity_lambda > 0.0:
+            total = total + args.structural_sparsity_lambda * w.abs().mean()
+    return total
+
+
 # -----------------------------
 # TEST-TIME TRAINING (LoRA)
 # -----------------------------
@@ -1166,6 +1201,12 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(
+        f"eval_tail: skip_post_train_eval={int(args.skip_post_train_eval)} "
+        f"skip_ttt_eval={int(args.skip_ttt_eval)} "
+        f"lane5_compression_w={args.compression_objective_weight} "
+        f" lane5_mdl_lambda={args.mdl_penalty_lambda} lane5_l1_lambda={args.structural_sparsity_lambda}"
+    )
 
     # -----------------------------
     # DATA LOADER & MODEL WARMUP
@@ -1274,6 +1315,12 @@ def main() -> None:
             x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 loss = model(x, y)
+                if (
+                    args.compression_objective_weight > 0.0
+                    or args.mdl_penalty_lambda > 0.0
+                    or args.structural_sparsity_lambda > 0.0
+                ):
+                    loss = loss + lane5_compression_auxiliary_loss(base_model, args).to(dtype=loss.dtype)
             train_loss += loss.detach()
             (loss * grad_scale).backward()
         train_loss /= grad_accum_steps
@@ -1353,44 +1400,53 @@ def main() -> None:
 
     if distributed:
         dist.barrier()
-    with open("final_model.int8.ptz", "rb") as f:
-        quant_blob_disk = f.read()
-    quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
-    base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
-    torch.cuda.synchronize()
-    t_qeval = time.perf_counter()
-    q_val_loss, q_val_bpb = eval_val(
-        args,
-        model,
-        rank,
-        world_size,
-        device,
-        grad_accum_steps,
-        val_tokens,
-        base_bytes_lut,
-        has_leading_space_lut,
-        is_boundary_token_lut,
-    )
-    torch.cuda.synchronize()
-    log0(
-        f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
-        f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
-    )
-    log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+    if args.skip_post_train_eval:
+        log0(
+            "skip_post_train_eval: skipping int8 roundtrip validation and TTT LoRA "
+            "(set SKIP_POST_TRAIN_EVAL=0 for final_int8_zlib_roundtrip_exact / TTT)"
+        )
+    else:
+        with open("final_model.int8.ptz", "rb") as f:
+            quant_blob_disk = f.read()
+        quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
+        base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
+        torch.cuda.synchronize()
+        t_qeval = time.perf_counter()
+        q_val_loss, q_val_bpb = eval_val(
+            args,
+            model,
+            rank,
+            world_size,
+            device,
+            grad_accum_steps,
+            val_tokens,
+            base_bytes_lut,
+            has_leading_space_lut,
+            is_boundary_token_lut,
+        )
+        torch.cuda.synchronize()
+        log0(
+            f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
+            f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
+        )
+        log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
 
-    # LoRA test-time training evaluation (the competition score)
-    torch._dynamo.reset()
-    torch.cuda.synchronize()
-    t_ttt = time.perf_counter()
-    ttt_val_loss, ttt_val_bpb = eval_val_ttt_lora(
-        args, base_model, rank, world_size, device,
-        base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
-    )
-    torch.cuda.synchronize()
-    log0(
-        f"final_int8_ttt_lora val_loss:{ttt_val_loss:.4f} val_bpb:{ttt_val_bpb:.4f} "
-        f"eval_time:{1000.0 * (time.perf_counter() - t_ttt):.0f}ms"
-    )
+        if not args.skip_ttt_eval:
+            # LoRA test-time training evaluation (the competition score)
+            torch._dynamo.reset()
+            torch.cuda.synchronize()
+            t_ttt = time.perf_counter()
+            ttt_val_loss, ttt_val_bpb = eval_val_ttt_lora(
+                args, base_model, rank, world_size, device,
+                base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
+            )
+            torch.cuda.synchronize()
+            log0(
+                f"final_int8_ttt_lora val_loss:{ttt_val_loss:.4f} val_bpb:{ttt_val_bpb:.4f} "
+                f"eval_time:{1000.0 * (time.perf_counter() - t_ttt):.0f}ms"
+            )
+        else:
+            log0("skip_ttt_eval: skipped final_int8_ttt_lora (set SKIP_TTT_EVAL=0 to run)")
 
     if distributed:
         dist.destroy_process_group()

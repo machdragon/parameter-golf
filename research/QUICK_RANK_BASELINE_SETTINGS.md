@@ -22,6 +22,10 @@ Everything else comes from **`train_gpt.py` `Hyperparameters`** defaults unless 
 | `MAX_WALLCLOCK_SECONDS` | `180` | Hard stop ~3 min |
 | `USE_COMPILE` | `0` | Matches `scripts/quick_harness.sh` (no `torch.compile`) |
 | `SDP_*` | cudnn 0, flash 1, mem_eff 0, math 0 | Same as old quick harness |
+| `SKIP_TTT_EVAL` | `1` | **Not** in `quick_protocol` — set by [`scripts/quick_harness.sh`](../scripts/quick_harness.sh) by default so the long `final_int8_ttt_lora` phase is skipped (quick gate uses `quick_metric` only). |
+| `SKIP_POST_TRAIN_EVAL` | `0` | Optional; `1` skips **both** int8 roundtrip val and TTT (fastest smoke). |
+
+**Faster validation batches (optional, biased):** export a smaller `VAL_BATCH_SIZE` (must stay ≥ `TRAIN_SEQ_LEN` × world × grad_accum); e.g. `65536` or `131072` for rough A/B only.
 
 ## `baseline` preset
 
@@ -36,4 +40,6 @@ No extra env keys — model shape and optimizer LRs are **stock** `Hyperparamete
 | LRs | e.g. `MATRIX_LR` / `SCALAR_LR` 0.04, `EMBED_LR` 0.6, etc. (see `train_gpt.py`) |
 | Val | Full val split; `VAL_BATCH_SIZE` 524288 |
 
-**Why it can feel slow:** even with **20 iterations**, the run still does **tokenizer/dataset setup**, **`torch.compile` warmup**, and **full validation + int8/zlib + TTT LoRA** at the end of `train_gpt.py` — that tail work dominates wall time for a “quick” sweep unless you patch `train_gpt.py`.
+**Why it used to feel slow:** the **`final_int8_ttt_lora`** pass alone can take **15+ minutes** on the full val split. `scripts/quick_harness.sh` now defaults **`SKIP_TTT_EVAL=1`**. For lane_5 promotion you still want **`final_int8_zlib_roundtrip_exact`** — run with `SKIP_TTT_EVAL=1` (TTT off) or full pipeline with `SKIP_TTT_EVAL=0` when comparing to leaderboard TTT.
+
+Stock `train_gpt.py` also supports **`SKIP_POST_TRAIN_EVAL=1`** to skip int8 roundtrip + TTT (fastest smoke; no roundtrip metric).

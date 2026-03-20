@@ -52,12 +52,18 @@ export SDP_FLASH="${SDP_FLASH:-1}"
 export SDP_MEM_EFFICIENT="${SDP_MEM_EFFICIENT:-0}"
 export SDP_MATH="${SDP_MATH:-0}"
 
+# Post-train eval: TTT LoRA dominates wall time on short runs; quick gate uses `quick_metric` only.
+export SKIP_TTT_EVAL="${SKIP_TTT_EVAL:-1}"
+# Set SKIP_POST_TRAIN_EVAL=1 for fastest smoke (skips int8 roundtrip val too — not for lane_5 promotion).
+export SKIP_POST_TRAIN_EVAL="${SKIP_POST_TRAIN_EVAL:-0}"
+
 echo "profile=${profile}"
 echo "run_id=${RUN_ID}"
 echo "log=${log_path}"
 echo "nproc_per_node=${NPROC_PER_NODE}"
 echo "quick_defaults: WARMUP_STEPS=${WARMUP_STEPS} ITERATIONS=${ITERATIONS} VAL_LOSS_EVERY=${VAL_LOSS_EVERY}"
 echo "quick_backend_defaults: USE_COMPILE=${USE_COMPILE} SDP_CUDNN=${SDP_CUDNN} SDP_FLASH=${SDP_FLASH} SDP_MEM_EFFICIENT=${SDP_MEM_EFFICIENT} SDP_MATH=${SDP_MATH}"
+echo "eval_tail: SKIP_TTT_EVAL=${SKIP_TTT_EVAL} SKIP_POST_TRAIN_EVAL=${SKIP_POST_TRAIN_EVAL}"
 
 cd "${ROOT_DIR}"
 

@@ -14,7 +14,7 @@
       "SDP_MEM_EFFICIENT": "0",
       "SDP_MATH": "0"
     },
-    "comment": "Short screening; USE_COMPILE=0 matches scripts/quick_harness.sh defaults. Full val + int8/TTT tail still run in stock train_gpt.py."
+    "comment": "Short screening; USE_COMPILE=0 matches scripts/quick_harness.sh. SKIP_TTT_EVAL is set by quick_harness.sh (not here) unless you export it."
   },
   "presets": [
     {
@@ -62,14 +62,24 @@
       "lane_ref": null,
       "env": { "TTT_LORA_RANK": "16" },
       "notes": "Affects TTT LoRA eval path if that eval is active in your run."
+    },
+    {
+      "id": "lane_5_compression_screen",
+      "lane_ref": "lane_5",
+      "env": {
+        "COMPRESSION_OBJECTIVE_WEIGHT": "0.01",
+        "MDL_PENALTY_LAMBDA": "1e-6",
+        "STRUCTURAL_SPARSITY_LAMBDA": "1e-6"
+      },
+      "notes": "Starter MDL/compression penalties in stock train_gpt.py; tune down if unstable."
     }
   ],
   "lanes_not_env_only": {
     "lane_1": "Recurrence + train-time LoRA + gating: not in stock Hyperparameters; needs forked train_gpt.py.",
     "lane_3": "QAT / compression-reg: not in upstream starter env list.",
     "lane_4": "Tokenizer swap: set TOKENIZER_PATH/VOCAB_SIZE only if you have another .model on disk.",
-    "lane_5": "Composite / multi-mechanism: usually record-local code.",
-    "lane_6": "Entropy / MDL: typically custom loss or routing — code change.",
+    "lane_5": "Compression-aware losses: COMPRESSION_OBJECTIVE_WEIGHT, MDL_PENALTY_LAMBDA, STRUCTURAL_SPARSITY_LAMBDA in stock train_gpt.py (see arc_inputs/README.md).",
+    "lane_6": "Byte-grouped serialization / packaging: often custom export path, not only env.",
     "lane_7": "Muon WD / spectral init: often in winning records as code edits, not a single env.",
     "lane_8": "Sliding-window or eval hacks: custom forward in record train_gpt.py.",
     "lane_9": "Pack/routing: code change.",

@@ -10,6 +10,9 @@ from pathlib import Path
 QUICK_METRIC_RE = re.compile(
     r"quick_metric step:(?P<step>\d+) val_bpb:(?P<val_bpb>[-+0-9.eE]+) train_time_ms:(?P<train_time_ms>[-+0-9.eE]+)"
 )
+ROUNDTRIP_EXACT_RE = re.compile(
+    r"final_int8_zlib_roundtrip_exact val_loss:(?P<val_loss>[-+0-9.eE]+) val_bpb:(?P<val_bpb>[-+0-9.eE]+)"
+)
 
 
 def parse_quick_metric(log_path: Path) -> dict[str, float | int | str]:
@@ -33,6 +36,22 @@ def parse_quick_metric(log_path: Path) -> dict[str, float | int | str]:
     }
 
 
+def parse_final_int8_zlib_roundtrip_exact(log_path: Path) -> dict[str, float] | None:
+    """Last `final_int8_zlib_roundtrip_exact` line if present (skipped when SKIP_POST_TRAIN_EVAL=1)."""
+    last: re.Match[str] | None = None
+    with log_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            match = ROUNDTRIP_EXACT_RE.search(line)
+            if match is not None:
+                last = match
+    if last is None:
+        return None
+    return {
+        "val_loss": float(last.group("val_loss")),
+        "val_bpb": float(last.group("val_bpb")),
+    }
+
+
 def command_snapshot(args: argparse.Namespace) -> int:
     profile = args.profile
     log_path = Path(args.log).resolve()
@@ -40,6 +59,7 @@ def command_snapshot(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     metric = parse_quick_metric(log_path)
+    roundtrip = parse_final_int8_zlib_roundtrip_exact(log_path)
     payload = {
         "profile": profile,
         "log_path": str(log_path),
@@ -47,6 +67,8 @@ def command_snapshot(args: argparse.Namespace) -> int:
         "val_bpb": metric["val_bpb"],
         "train_time_ms": metric["train_time_ms"],
     }
+    if roundtrip is not None:
+        payload["final_int8_zlib_roundtrip_exact"] = roundtrip
     out_path = out_dir / f"{profile}.json"
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(
