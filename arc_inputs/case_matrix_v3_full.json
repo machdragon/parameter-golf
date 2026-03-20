@@ -1,0 +1,745 @@
+{
+  "version": "4.2",
+  "name": "arc_case_matrix_v4_full_coverage_sharpened",
+  "objective": "Minimize post-roundtrip val_bpb under quick-gate runtime guardrails and 16MB artifact compliance on promotion.",
+  "notes": [
+    "v4 incorporates all reviewer tightenings: sharper hypothesis_statement, causal_story, strengthened null_result_interpretation, explicit execution_priority.",
+    "High-confidence lanes (3,6,7,8) untouched. Composite lanes (1,2,5,9) now single-mechanism first.",
+    "Ready for AutoResearchClaw + quick_harness.sh; follow execution_priority (v4.1 leads with lane_5).",
+    "v4.1: Priorities adjusted using openai/parameter-golf track_10min_16mb README crosswalk (Mar 2026): demote QAT (lane_3), generic LR-only sweeps (lane_12 note), recurrence-under-10min (lane_1), lzma/codec swaps (lane_6), blind RoPE/pos tweaks duplicating long-context/NTK (lane_11). See external_evidence_notes per lane; run dedupe checklist arc_inputs/SOTA_CROSSWALK_RUN_CHECKLIST.md.",
+    "v4.2: Appended openai/parameter-golf OPEN pull-request scan (Mar 2026). These are not merged and not accepted official records—hypothesis hints only; see external_evidence_notes suffix 'Open PRs (unmerged):' and SOTA_CROSSWALK_RUN_CHECKLIST.md §Open PRs."
+  ],
+  "lanes": [
+    {
+      "id": "lane_1",
+      "priority": "P1",
+      "name": "Recurrence + LoRA + lightweight routing/gating composite",
+      "hypothesis": "Given a recurrent shared-block baseline, adding low-rank specialization (LoRA) + lightweight gating will improve quality per byte.",
+      "hypothesis_statement": "If we start from recurrence-only and add LoRA specialization plus residual gating, post-roundtrip val_bpb will improve at fixed artifact budget while keeping runtime under 1.10x baseline.",
+      "why_this_might_work": [
+        "Recurrence gives effective depth at almost zero extra storage.",
+        "LoRA recovers loop-specific specialization cheaply.",
+        "Per-head or residual gating adds dynamic routing with tiny overhead."
+      ],
+      "direction": [
+        "Use recurrence for effective depth at low storage cost.",
+        "Use LoRA to recover loop-specific specialization.",
+        "Add per-head or residual gating with minimal overhead."
+      ],
+      "primary_knobs": [
+        "num_shared_blocks",
+        "num_recurrence_loops",
+        "lora_rank",
+        "lora_alpha",
+        "lora_dropout",
+        "residual_gate_enabled",
+        "per_head_gate_enabled"
+      ],
+      "minimal_ablations": [
+        "recurrence_only",
+        "recurrence+LoRA",
+        "recurrence+gating",
+        "full_composite"
+      ],
+      "null_result_interpretation": "If no gain, recurrence alone is sufficient and extra gating/LoRA adds runtime without quality payoff.",
+      "evaluation_plan": "Run quick_harness.sh baseline first (20 steps, seed=1337), then candidate. Parse val_bpb from log. Require val_bpb < baseline AND runtime_ms <= baseline*1.10. For promotion: artifact_bytes <=16000000 AND post-roundtrip val_bpb reported.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Testing whether recurrent shared blocks plus cheap specialization and gating beat the baseline on post-roundtrip quality without blowing runtime.",
+      "what_still_needs_to_be_done": [
+        "split into minimal ablations (recurrence only / +LoRA / +gating / full)",
+        "define exact runtime baseline for the 1.10x ceiling",
+        "implement gating in the cleanest low-overhead form first"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md",
+        "docs/PR_APPROACHES.md",
+        "docs/deep-research-report.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/PR_APPROACHES.md",
+          "docs/deep-research-report.md",
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "recurrent transformer weight sharing lora gating",
+          "parameter efficient recurrence adapters"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'NUM_SHARED_BLOCKS':'3','NUM_RECURRENCE_LOOPS':'3','LORA_RANK':'8','LORA_ALPHA':'16','RESIDUAL_GATE_ENABLED':'1'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Recurrence gives cheap depth; LoRA + gating recovers specialization without full parameter cost.",
+      "external_evidence_notes": "Parameter Golf FP16Embed README: depth recurrence failed under 10min wall-clock (needs more steps). LoRA TTT record uses eval-time LoRA on frozen baseline—not this lane's training-time recurrence+LoRA composite. Demoted from P0: isolate recurrence without LoRA or relax budget before composite. Open PRs (unmerged): many submissions still explore depth recurrence, looped blocks, shared-heavy MLX harnesses, and widen+different budgets—not proof until merged; contradicts single merged README negative only insofar as configs differ."
+    },
+    {
+      "id": "lane_2",
+      "priority": "P1",
+      "name": "Recurrence + MQA/GQA efficiency",
+      "hypothesis": "Reducing KV-head count under recurrence frees bytes/runtime that can be reinvested to improve val_bpb.",
+      "hypothesis_statement": "If we reduce KV-head parameterization under recurrence, the freed budget lets us preserve or improve post-roundtrip val_bpb while staying under the quick-gate runtime ceiling.",
+      "why_this_might_work": [
+        "MQA/GQA drastically reduces KV cache and parameter count.",
+        "Recurrence can reinvest the saved budget into more loops."
+      ],
+      "direction": [
+        "Tune MQA/GQA-style head allocation under recurrent depth.",
+        "Track quality/runtime balance using quick-gate runtime ceiling."
+      ],
+      "primary_knobs": [
+        "num_heads",
+        "num_kv_heads",
+        "head_dim",
+        "num_recurrence_loops"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "recurrence_only",
+        "recurrence+MQA2",
+        "recurrence+GQA2"
+      ],
+      "null_result_interpretation": "If no gain, attention efficiency savings do not translate to recurrent depth or the model is already KV-bottlenecked.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb and runtime_ms. Require val_bpb < baseline AND runtime_ms <= baseline*1.10. For promotion: artifact_bytes <=16000000.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Testing whether attention efficiency savings can be reinvested into recurrent depth or artifact budget.",
+      "what_still_needs_to_be_done": [
+        "define exact baseline attention setup",
+        "confirm whether runtime is secondary or a hard gate",
+        "run a small head-count sweep before broader search"
+      ],
+      "source_refs": [
+        "docs/PR_APPROACHES.md",
+        "docs/WORLD_RECORD_RESEARCH.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/WORLD_RECORD_RESEARCH.md",
+          "docs/slowrun_world_record_research.md"
+        ],
+        "external_search_queries": [
+          "grouped query attention recurrent transformer",
+          "multi-query attention small language model efficiency"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'NUM_HEADS':'8','NUM_KV_HEADS':'2','HEAD_DIM':'64','NUM_RECURRENCE_LOOPS':'3'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "MQA/GQA reduces KV overhead; recurrence can convert saved budget into better effective depth.",
+      "external_evidence_notes": "Baseline records already use GQA (e.g. 8 heads / 4 KV). No new head sweep in merged READMEs; lane unchanged. Open PRs (unmerged): occasional wider/different head stacks in recurrence submissions; no consensus—treat as exploratory."
+    },
+    {
+      "id": "lane_3",
+      "priority": "P2",
+      "name": "QAT + roundtrip-aware compression alignment",
+      "hypothesis": "Training aligned to the quantized/compressed deployment path preserves post-roundtrip quality.",
+      "hypothesis_statement": "If we enable staged QAT aligned to int8+zlib roundtrip, post-roundtrip val_bpb will improve versus float-only training under the same gate budget.",
+      "why_this_might_work": [
+        "Fake-quant matches the exact export path.",
+        "Compression-aware regularization prevents quality drop on roundtrip."
+      ],
+      "direction": [
+        "Use QAT schedules that match the final int8+zlib roundtrip path.",
+        "Use compression-aware regularization and packing-aligned knobs."
+      ],
+      "primary_knobs": [
+        "qat_enabled",
+        "qat_start_frac",
+        "qat_group_size",
+        "compression_reg_lambda",
+        "quant_error_weight",
+        "fake_quant_strength"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "QAT_only",
+        "compression_reg_only",
+        "full staged QAT"
+      ],
+      "null_result_interpretation": "If no gain, the current int8 roundtrip is already lossless enough or QAT destabilizes small-model training.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10. Promotion requires post-roundtrip eval on the actual .int8.ptz file.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Making training match deployment so the final compressed artifact performs better after roundtrip.",
+      "what_still_needs_to_be_done": [
+        "make sure fake quant path matches actual export path closely",
+        "define staged schedule variants",
+        "isolate whether gains come from QAT or compression regularization"
+      ],
+      "source_refs": [
+        "docs/grok_research.md",
+        "docs/high_priority_research_topics.md",
+        "docs/deep-research-report.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/grok_research.md",
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "quantization aware training language model int8",
+          "straight-through estimator fake quantization"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'QAT_ENABLED':'1','QAT_START_FRAC':'0.5','QAT_GROUP_SIZE':'32','COMPRESSION_REG_LAMBDA':'1e-4'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Matching train-time noise/regularization to the export path reduces roundtrip mismatch.",
+      "external_evidence_notes": "FP16Embed README: full-training and late-stage QAT tried—step overhead not worth small quant gap vs float training. Demoted P0→P2 unless cheaper QAT path. Open PRs (unmerged): e.g. int8 QAT ablation PR argues overhead exceeds gap recovery (aligns with merged FP16). Several int6+STE QAT record PRs pending—if merged, narrows lane to int6 STE vs int8 QAT; still not accepted."
+    },
+    {
+      "id": "lane_4",
+      "priority": "P2",
+      "name": "Tokenizer lane (strict gate)",
+      "hypothesis": "Tokenizer choices can improve val_bpb but require stricter accounting and reproducibility checks.",
+      "hypothesis_statement": "If tokenizer vocabulary/algorithm is improved with strict accounting, val_bpb can improve without invalidating comparability.",
+      "why_this_might_work": [
+        "Better tokenization compresses the validation set more efficiently."
+      ],
+      "direction": [
+        "Evaluate tokenizer variants only after baseline accounting is stable.",
+        "Require stricter promotion review than other lanes."
+      ],
+      "primary_knobs": [
+        "tokenizer_path",
+        "vocab_size",
+        "dataset_variant",
+        "tokenizer_kind"
+      ],
+      "minimal_ablations": [
+        "baseline SP1024",
+        "new vocab 4096",
+        "new BPE variant"
+      ],
+      "null_result_interpretation": "If no gain or accounting fails, tokenizer changes cannot be fairly compared under the current val_bpb metric.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Run verify_token_accounting(). Require val_bpb < baseline AND runtime_ms <= baseline*1.10. Promotion requires manual review of token accounting.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass_plus_manual_review",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "token accounting and dataset consistency review complete",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Exploring tokenizer gains carefully without invalidating comparisons.",
+      "what_still_needs_to_be_done": [
+        "define exact comparability rules",
+        "pin dataset/token accounting procedure",
+        "keep this out of early automated exploration until baseline is stable"
+      ],
+      "source_refs": [
+        "docs/tao-structure-randomness-enigma-notes.md",
+        "docs/deep-research-report.md",
+        "docs/high_priority_research_topics.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/tao-structure-randomness-enigma-notes.md",
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "sentencepiece vocab size compression language modeling",
+          "token accounting reproducibility tokenizer experiments"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'VOCAB_SIZE':'4096','TOKENIZER_KIND':'spm'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); verify_token_accounting(); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Better tokenization compresses the validation set more efficiently.",
+      "external_evidence_notes": "Merged SOTA records fixed sp1024 tokenizer; no tokenizer experiments in crosswalk. Strict accounting gate unchanged. Open PRs (unmerged): multiple pending record PRs use vocab 4096 or 8192 + selective quant; strict token accounting still required if you pursue."
+    },
+    {
+      "id": "lane_5",
+      "priority": "P0",
+      "name": "Artifact-centric objective optimization (MDL/compression lens)",
+      "hypothesis": "Adding a quantization-aware regularization term (fake-quant proxy + entropy) improves post-roundtrip score.",
+      "hypothesis_statement": "If the training objective includes a roundtrip proxy loss (fake int8 quant + entropy penalty), post-roundtrip val_bpb will improve at fixed artifact limit.",
+      "why_this_might_work": [
+        "MDL penalty directly optimizes for the metric that matters after compression.",
+        "Structural sparsity favors parameters that quantize well."
+      ],
+      "direction": [
+        "Treat compressed artifact quality as first-class objective signal.",
+        "Favor losses that preserve low-complexity structure under quantization/compression."
+      ],
+      "primary_knobs": [
+        "compression_objective_weight",
+        "mdl_penalty_lambda",
+        "structural_sparsity_lambda"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "MDL_only",
+        "sparsity_only",
+        "full compression objective"
+      ],
+      "null_result_interpretation": "If no gain, the current int8+zlib path is already near-optimal or the penalty destabilizes training.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Trying to train models that are naturally easier to compress well, not just accurate before compression.",
+      "what_still_needs_to_be_done": [
+        "narrow the first concrete mechanism (MDL / sparsity / proxy loss)",
+        "avoid making this lane too broad",
+        "define one small first experiment"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md",
+        "docs/grok_research.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md",
+          "docs/grok_research.md"
+        ],
+        "external_search_queries": [
+          "minimum description length neural network compression objective",
+          "compression-aware training objective language model"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'MDL_PENALTY_LAMBDA':'1e-5','COMPRESSION_OBJECTIVE_WEIGHT':'0.1'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Directly penalizing roundtrip fragility should improve compressed-model behavior at equal size.",
+      "external_evidence_notes": "10L MixedPrecision record: int6 middle-layer PTQ + zlib fits 10L under 16MB—validates export-side precision allocation / roundtrip BPB. Narrow this lane toward layered quant + compression alignment; generic MDL training loss still unproven in READMEs. Open PRs (unmerged): dominant pending stack is int6 per-row + MLP 3x + fp16 tied embed + STE/fake int6 QAT + sliding eval + zstd (often zstd-22) + warmdown/LR/Muon/SWA—reinforces export-path-first P0 focus; not accepted until merge."
+    },
+    {
+      "id": "lane_6",
+      "priority": "P2",
+      "name": "Byte-grouped serialization for artifact compression",
+      "hypothesis": "Byte-grouped packing improves compressed artifact size at comparable quality.",
+      "hypothesis_statement": "If we serialize quantized weights with byte-grouped packing, artifact bytes will decrease without hurting post-roundtrip val_bpb.",
+      "why_this_might_work": [
+        "Better packing reduces zlib entropy.",
+        "No change to model/training - pure packaging win."
+      ],
+      "direction": [
+        "Compare byte-grouped versus default serialization path.",
+        "Hold model/training fixed and isolate packaging impact."
+      ],
+      "primary_knobs": [
+        "serialization_mode",
+        "group_bytes",
+        "zlib_level"
+      ],
+      "minimal_ablations": [
+        "default",
+        "byte_group_64",
+        "byte_group_128"
+      ],
+      "null_result_interpretation": "If no size reduction, zlib already saturates or grouping introduces alignment overhead.",
+      "evaluation_plan": "Train baseline once, then serialize in both modes. Evaluate roundtrip on each and compare artifact_bytes + val_bpb.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Testing whether better packing alone can improve leaderboard-relevant artifact quality/size.",
+      "what_still_needs_to_be_done": [
+        "define serialization interface cleanly",
+        "compare zlib levels and group sizes systematically",
+        "ensure eval truly uses roundtripped artifact"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md",
+        "docs/PR_APPROACHES.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "weight serialization packing compression int8",
+          "byte grouping zlib compression neural checkpoints"
+        ]
+      },
+      "starter_pseudocode": "train_baseline_once(); for mode in ['default', 'byte_group_quantized']: artifact = serialize_checkpoint(mode=mode, group_bytes=64); evaluate_roundtrip(artifact); compare(val_bpb, artifact_bytes)",
+      "causal_story": "Better packing reduces zlib entropy. No change to model/training - pure packaging win.",
+      "external_evidence_notes": "FP16Embed: lzma compresses worse than zlib for int8 weights. Byte-grouping not in READMEs; slight demote alternative codecs/packing until isolated. Open PRs (unmerged): many pending submissions use zstd (high levels) on int6 payloads vs merged README lzma negative on int8—codec choice remains active; unmerged."
+    },
+    {
+      "id": "lane_7",
+      "priority": "P1",
+      "name": "LAWA checkpoint averaging",
+      "hypothesis": "Late-window checkpoint averaging improves final quality without increasing artifact bytes.",
+      "hypothesis_statement": "If we apply lightweight checkpoint averaging near the end of training, post-roundtrip val_bpb will improve at negligible runtime cost.",
+      "why_this_might_work": [
+        "Averaging smooths noise in the final phase.",
+        "Zero extra parameters - just post-process."
+      ],
+      "direction": [
+        "Enable LAWA only in terminal phase.",
+        "Test interval/window sensitivity with fixed baseline settings."
+      ],
+      "primary_knobs": [
+        "lawa_enabled",
+        "lawa_interval",
+        "lawa_window"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "LAWA_interval10_window5"
+      ],
+      "null_result_interpretation": "If no gain, the optimizer already converges to a flat minimum or averaging hurts the final export.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Trying a low-risk late-stage training trick to squeeze extra quality out of the same architecture.",
+      "what_still_needs_to_be_done": [
+        "define checkpoint save cadence",
+        "confirm averaging occurs before final export path",
+        "test with one stable baseline first"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "stochastic weight averaging language model",
+          "checkpoint averaging low compute fine tuning"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'LAWA_ENABLED':'1','LAWA_INTERVAL':'10','LAWA_WINDOW':'5'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Averaging smooths noise in the final phase. Zero extra parameters - just post-process.",
+      "external_evidence_notes": "Not mentioned in merged record READMEs—still an open training-time lever vs community SOTA. Open PRs (unmerged): SWA/LAWA / late checkpoint averaging appears in multiple high-score pending records (often with int6 stack)—strengthens P1 ablations if your trainer supports it; not merged proof."
+    },
+    {
+      "id": "lane_8",
+      "priority": "P1",
+      "name": "MTP training-only auxiliary heads",
+      "hypothesis": "Training-only multi-token prediction heads can improve convergence with no artifact-byte increase.",
+      "hypothesis_statement": "If we enable low-weight MTP auxiliary loss during training, final post-roundtrip val_bpb will improve with near-zero deploy-time cost.",
+      "why_this_might_work": [
+        "Extra learning signal speeds convergence.",
+        "Aux heads discarded at export - zero byte cost."
+      ],
+      "direction": [
+        "Enable MTP heads only during training.",
+        "Tune auxiliary loss weight to avoid destabilization."
+      ],
+      "primary_knobs": [
+        "mtp_num_heads",
+        "mtp_loss_weight",
+        "mtp_start_step",
+        "mtp_end_step"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "MTP_weight0.15"
+      ],
+      "null_result_interpretation": "If no gain or destabilization, the auxiliary signal is not helpful for this tiny model scale.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Adding extra learning signal during training, then removing it for deployment.",
+      "what_still_needs_to_be_done": [
+        "define when auxiliary heads turn on/off",
+        "confirm no deploy artifact contamination",
+        "run a small loss-weight sweep"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "multi-token prediction auxiliary loss",
+          "training-only auxiliary heads language models"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'MTP_NUM_HEADS':'2','MTP_LOSS_WEIGHT':'0.15'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Extra learning signal speeds convergence. Aux heads discarded at export - zero byte cost.",
+      "external_evidence_notes": "Not mentioned in merged record READMEs—open gap. Open PRs (unmerged): at least one pending record combines MTP with int6+sliding stack—supports keeping MTP on P1; not merged."
+    },
+    {
+      "id": "lane_9",
+      "priority": "P1",
+      "name": "Value projections from shared representation (x0)",
+      "hypothesis": "Deriving values from a shared latent representation (x0) reduces stored parameters while preserving quality.",
+      "hypothesis_statement": "If value projections are generated from a shared representation instead of separate tables, the model will achieve comparable or better post-roundtrip val_bpb with fewer stored parameters.",
+      "why_this_might_work": [
+        "Reuses existing x0 representation.",
+        "Low-rank projection adds almost no parameters."
+      ],
+      "direction": [
+        "Compare shared-value projection against baseline value-table path.",
+        "Track parameter overhead and stability."
+      ],
+      "primary_knobs": [
+        "value_from_x0_enabled",
+        "value_projection_rank",
+        "value_projection_dropout"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "value_from_x0_rank16"
+      ],
+      "null_result_interpretation": "If no gain, value tables are already optimal or the shared path hurts attention stability.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Testing whether value computation can share more structure and save parameters.",
+      "what_still_needs_to_be_done": [
+        "define exact baseline path being replaced",
+        "clarify expected savings mechanism",
+        "add one stability-focused ablation"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md",
+        "docs/slowrun_world_record_research.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/slowrun_world_record_research.md",
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "shared representation value projection transformers",
+          "parameter efficient value projection attention"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'VALUE_FROM_X0_ENABLED':'1','VALUE_PROJECTION_RANK':'16'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Shared representation reuse cuts duplicated value parameters while preserving expressivity.",
+      "external_evidence_notes": "Not mentioned in merged record READMEs—open gap. Open PRs (unmerged): no strong recurring theme in titles; still a gap."
+    },
+    {
+      "id": "lane_10",
+      "priority": "P1",
+      "name": "U-Net / mirrored skip structure",
+      "hypothesis": "Mirrored skip structure can improve optimization efficiency under tight budgets.",
+      "hypothesis_statement": "If we add a lightweight mirrored skip structure, convergence and final post-roundtrip val_bpb will improve for the same parameter budget.",
+      "why_this_might_work": [
+        "Skip connections help gradient flow in deep-ish models.",
+        "Mirrored design reuses existing parameters."
+      ],
+      "direction": [
+        "Add minimal mirrored skip links.",
+        "Constrain parameter increase and monitor runtime impact."
+      ],
+      "primary_knobs": [
+        "mirrored_skip_enabled",
+        "skip_projection_rank",
+        "skip_scale"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "mirrored_skip_rank8"
+      ],
+      "null_result_interpretation": "If no gain, the model is too shallow for skips to help or the projection adds too much overhead.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Testing whether skip-style information flow helps small-budget optimization.",
+      "what_still_needs_to_be_done": [
+        "define the smallest possible skip implementation",
+        "keep parameter growth tightly bounded",
+        "treat this as more speculative than lanes 3/6/7/8"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "u-net skip connections transformer language model",
+          "mirrored skip architecture lightweight transformer"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'MIRRORED_SKIP_ENABLED':'1','SKIP_PROJECTION_RANK':'8'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Skip connections help gradient flow in deep-ish models. Mirrored design reuses existing parameters.",
+      "external_evidence_notes": "Not mentioned in merged record READMEs—open gap. Open PRs (unmerged): some 'skip connections' / stacked architectures in titles; sparse vs int6 flood—still speculative."
+    },
+    {
+      "id": "lane_11",
+      "priority": "P2",
+      "name": "Position/attention treatment tweaks",
+      "hypothesis": "Targeted positional/attention tweaks can improve quality without large model-size changes.",
+      "hypothesis_statement": "If we tune positional handling and attention windows, post-roundtrip val_bpb can improve without increasing artifact size materially.",
+      "why_this_might_work": [
+        "Truncated RoPE or selective windows reduce noise.",
+        "Partial key offset improves positional encoding efficiency."
+      ],
+      "direction": [
+        "Test partial key offset and truncated RoPE variants.",
+        "Test selective/local window settings under quick gate."
+      ],
+      "primary_knobs": [
+        "rope_truncation_frac",
+        "partial_key_offset",
+        "selective_window_size",
+        "local_attention_enabled"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "rope_trunc_0.75",
+        "selective_window_256"
+      ],
+      "null_result_interpretation": "If no gain, the default RoPE + full attention is already optimal for 1024 context.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate. Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Trying small attention/positioning changes that may yield quality gains cheaply.",
+      "what_still_needs_to_be_done": [
+        "split this into single-change ablations",
+        "avoid testing too many knobs in one run",
+        "identify which positional tweak is highest priority first"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md",
+        "docs/WORLD_RECORD_RESEARCH.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/WORLD_RECORD_RESEARCH.md",
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "truncated rope language model",
+          "selective attention window transformer"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'ROPE_TRUNCATION_FRAC':'0.75','SELECTIVE_WINDOW_SIZE':'256'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Truncated RoPE or selective windows reduce noise. Partial key offset improves positional encoding efficiency.",
+      "external_evidence_notes": "LongContextSeq2048 validates longer train context; notapplica/SOTA stack used NTK/RoPE-style eval in PR history. Demote blind RoPE/pos tweaks that duplicate those axes; only orthogonal single-change ablations. Open PRs (unmerged): many combine sliding-window eval + long train seq + vocab changes; orthogonal pos-only tweaks still scarce in titles."
+    },
+    {
+      "id": "lane_12",
+      "priority": "P2",
+      "name": "Advanced schedule/optimizer partition tuning",
+      "hypothesis": "Late-stage optimizer and schedule partition tuning can unlock additional gains once architecture stabilizes.",
+      "hypothesis_statement": "If we tune optimizer/schedule partitions after architecture selection, val_bpb can improve without violating runtime/artifact constraints.",
+      "why_this_might_work": [
+        "Partition-specific LR and weight decay can fine-tune convergence.",
+        "Late-stage cosine restarts escape plateaus."
+      ],
+      "direction": [
+        "Tune optimizer groups and schedule partitions after architecture lanes stabilize.",
+        "Prioritize low-risk adjustments with bounded runtime impact."
+      ],
+      "primary_knobs": [
+        "optimizer_partition_mode",
+        "lr_schedule_variant",
+        "weight_decay_partition",
+        "warmup_steps"
+      ],
+      "minimal_ablations": [
+        "baseline",
+        "cosine_restart",
+        "attn_vs_mlp_decay"
+      ],
+      "null_result_interpretation": "If no gain, the default Muon+Adam split is already optimal for this model scale.",
+      "evaluation_plan": "Run quick_harness.sh baseline first, then candidate (only after architecture lanes stabilize). Parse val_bpb. Require val_bpb < baseline AND runtime_ms <= baseline*1.10.",
+      "pass_fail_metric": "val_bpb",
+      "promotion_requirements": {
+        "quick_gate": "single_pass",
+        "full_path_checks": [
+          "artifact_bytes <= 16000000",
+          "post-roundtrip val_bpb reported",
+          "run metadata and logs archived"
+        ]
+      },
+      "what_we_are_doing": "Holding off a final tuning lane until stronger architecture candidates emerge.",
+      "what_still_needs_to_be_done": [
+        "explicitly mark as downstream of architecture selection",
+        "define optimizer partition choices",
+        "avoid spending early search budget here"
+      ],
+      "source_refs": [
+        "docs/high_priority_research_topics.md"
+      ],
+      "initial_research_seeds": {
+        "local_refs": [
+          "docs/high_priority_research_topics.md"
+        ],
+        "external_search_queries": [
+          "optimizer partitioning small language models",
+          "learning rate schedule late phase transformer"
+        ]
+      },
+      "starter_pseudocode": "env = os.environ.copy(); env.update({'LR_SCHEDULE_VARIANT':'cosine_restart','WEIGHT_DECAY_PARTITION':'attn_vs_mlp'}); result = subprocess.run(['torchrun','--standalone','--nproc_per_node=1','/parameter-golf/train_gpt.py'], capture_output=True, text=True, env=env); m = re.search(r'val_bpb[:\\s=]+([0-9.]+)', result.stdout); val_bpb = float(m.group(1)) if m else None; harness.report_metric('val_bpb', val_bpb)",
+      "causal_story": "Partition-specific LR and weight decay can fine-tune convergence. Late-stage cosine restarts escape plateaus.",
+      "external_evidence_notes": "Community heavily mined lower matrix/scalar/embed LRs, long warmdown, Muon WD (e.g. FP16Embed, 10L, SlidingWindow records). Avoid undifferentiated LR-only sweeps; use targeted Muon WD / partition tests after architecture freezes. Open PRs (unmerged): Muon-aware QAT + adaptive schedule PRs overlap this lane with lane_3/5—treat as pending hypotheses; do not duplicate generic LR sweeps."
+    }
+  ],
+  "execution_priority": [
+    "lane_5",
+    "lane_7",
+    "lane_8",
+    "lane_2",
+    "lane_9",
+    "lane_10",
+    "lane_1",
+    "lane_3",
+    "lane_4",
+    "lane_6",
+    "lane_11",
+    "lane_12"
+  ]
+}

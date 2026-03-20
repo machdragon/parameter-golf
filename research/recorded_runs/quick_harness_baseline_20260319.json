@@ -1,0 +1,21 @@
+{
+  "profile": "baseline",
+  "source_log": "logs/quick_harness/baseline_20260319_181307.log",
+  "recorded_at": "2026-03-19T18:13:07Z",
+  "harness_defaults": {
+    "DATA_PATH": "./data/datasets/fineweb10B_sp1024_1train",
+    "TOKENIZER_PATH": "./data/tokenizers/fineweb_1024_bpe.model",
+    "RUN_ID": "quick_baseline",
+    "ITERATIONS": 20,
+    "WARMUP_STEPS": 0,
+    "USE_COMPILE": false,
+    "SDP_FLASH": true
+  },
+  "metrics": {
+    "step": 20,
+    "val_bpb": 3.34363975,
+    "train_time_ms": 51237,
+    "val_loss": 5.6456
+  },
+  "notes": "From quick_harness.sh baseline; train_gpt quick_metric line. Peak GPU mem ~13.9 GiB alloc."
+}

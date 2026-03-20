@@ -1,12 +1,9 @@
-"""
-The `train_gpt.py` and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but competitive submissions should stay in the `/records` folder.
-
-Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `train_gpt_mlx.py` never are longer than 1500 lines.
-"""
+"""CUDA trainer entrypoint; keep this file ≤1500 lines (see also train_gpt_mlx.py)."""
 
 from __future__ import annotations
 
 import copy
+from collections import deque
 import glob
 import io
 import math
@@ -26,6 +23,24 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+from train_gpt_lawa import (
+    lawa_broadcast_float_state,
+    lawa_ema_shadow_init,
+    lawa_ema_update,
+    lawa_finalize_to_model,
+    lawa_float_state_cpu,
+)
+from train_gpt_sliding import eval_sliding_roundtrip
+
+# Staging profile: inject merged-baseline defaults before Hyperparameters reads env.
+if bool(int(os.environ.get("STAGING_PROFILE", "0"))):
+    _STAGING = {"NUM_LAYERS": "10", "WARMDOWN_ITERS": "2500", "TIED_EMBED_LR": "0.10",
+                "LAWA_ENABLED": "1", "EVAL_STRIDE": "512", "MUON_WEIGHT_DECAY": "0.02",
+                "ADAM_WEIGHT_DECAY": "0.01"}
+    for _k, _v in _STAGING.items():
+        if os.environ.get(_k) is None:
+            os.environ[_k] = _v
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -93,12 +108,32 @@ class Hyperparameters:
     ttt_eval_seq_len = int(os.environ.get("TTT_EVAL_SEQ_LEN", 1024))
     ttt_batch_size = int(os.environ.get("TTT_BATCH_SIZE", 64))
 
-# -----------------------------
-# MUON OPTIMIZER 
-# -----------------------------
-# 
-# As borrowed from modded-nanogpt
-# Background on Muon: https://kellerjordan.github.io/posts/muon/
+    # torch.compile (optional; `scripts/quick_harness.sh` sets USE_COMPILE=0 like parameter-golf-old).
+    use_compile = bool(int(os.environ.get("USE_COMPILE", "1")))
+    compile_fullgraph = bool(int(os.environ.get("COMPILE_FULLGRAPH", "1")))
+    compile_dynamic = bool(int(os.environ.get("COMPILE_DYNAMIC", "0")))
+
+    # Quick harness / eval tail: skip expensive post-train metrics (see scripts/quick_harness.sh).
+    skip_ttt_eval = bool(int(os.environ.get("SKIP_TTT_EVAL", "0")))
+    skip_post_train_eval = bool(int(os.environ.get("SKIP_POST_TRAIN_EVAL", "0")))
+
+    # Lane 5 (arc_inputs/case_matrix): compression-aware training; all default off.
+    compression_objective_weight = float(os.environ.get("COMPRESSION_OBJECTIVE_WEIGHT", "0.0"))
+    mdl_penalty_lambda = float(os.environ.get("MDL_PENALTY_LAMBDA", "0.0"))
+    structural_sparsity_lambda = float(os.environ.get("STRUCTURAL_SPARSITY_LAMBDA", "0.0"))
+
+    lawa_enabled = bool(int(os.environ.get("LAWA_ENABLED", "0")))
+    _lawa_mode_raw = os.environ.get("LAWA_MODE", "ema").strip().lower()
+    lawa_mode = _lawa_mode_raw if _lawa_mode_raw in ("ema", "checkpoint") else "ema"
+    lawa_ema_decay = float(os.environ.get("LAWA_EMA_DECAY", "0.999"))
+    lawa_interval = max(1, int(os.environ.get("LAWA_INTERVAL", "10")))
+    lawa_window = max(1, int(os.environ.get("LAWA_WINDOW", "5")))
+    eval_seq_len = int(os.environ.get("EVAL_SEQ_LEN", 0))       # 0 = same as train_seq_len
+    eval_stride = int(os.environ.get("EVAL_STRIDE", 0))          # 0 = non-overlapping (no sliding)
+    adam_weight_decay = float(os.environ.get("ADAM_WEIGHT_DECAY", 0.0))
+    muon_weight_decay = float(os.environ.get("MUON_WEIGHT_DECAY", 0.0))
+
+# MUON optimizer (modded-nanogpt; see kellerjordan.github.io/posts/muon/)
 
 def zeropower_via_newtonschulz5(G: Tensor, steps: int = 10, eps: float = 1e-7) -> Tensor:
     # Orthogonalize a 2D update matrix with a fast Newton-Schulz iteration.
@@ -748,6 +783,32 @@ class GPT(nn.Module):
         return F.cross_entropy(logits.float().reshape(-1, logits.size(-1)), target_ids.reshape(-1), reduction="mean")
 
 
+def lane5_compression_auxiliary_loss(model: GPT, args: Hyperparameters) -> Tensor:
+    """STE fake-int8 + optional L1 / L2 penalties on 2D block weights (lane_5). Defaults: all off."""
+    if (
+        args.compression_objective_weight <= 0.0
+        and args.mdl_penalty_lambda <= 0.0
+        and args.structural_sparsity_lambda <= 0.0
+    ):
+        return torch.zeros((), device=next(model.parameters()).device, dtype=torch.float32)
+    device = next(model.parameters()).device
+    total = torch.zeros((), device=device, dtype=torch.float32)
+    for name, p in model.blocks.named_parameters():
+        if p.ndim != 2 or any(pat in name for pat in CONTROL_TENSOR_NAME_PATTERNS):
+            continue
+        w = p.float()
+        if args.compression_objective_weight > 0.0:
+            scale = w.abs().max().clamp(min=1e-8) / 127.0
+            w_q = (w / scale).round().clamp(-127.0, 127.0) * scale
+            ste_mse = (w - w_q.detach()).pow(2).mean()
+            total = total + args.compression_objective_weight * ste_mse
+        if args.mdl_penalty_lambda > 0.0:
+            total = total + args.mdl_penalty_lambda * w.pow(2).mean()
+        if args.structural_sparsity_lambda > 0.0:
+            total = total + args.structural_sparsity_lambda * w.abs().mean()
+    return total
+
+
 # -----------------------------
 # TEST-TIME TRAINING (LoRA)
 # -----------------------------
@@ -959,16 +1020,19 @@ def eval_val_ttt_lora(
     val_bpb = float((loss_sum.item() / math.log(2.0)) / byte_sum.item())
     return val_loss, val_bpb
 
-# -----------------------------
 # TRAINING
-# -----------------------------
 
 def main() -> None:
     global zeropower_via_newtonschulz5
 
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
-    zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)
+    if args.use_compile:
+        zeropower_via_newtonschulz5 = torch.compile(
+            zeropower_via_newtonschulz5,
+            dynamic=args.compile_dynamic,
+            fullgraph=args.compile_fullgraph,
+        )
 
     # -----------------------------
     # DISTRIBUTED + CUDA SETUP
@@ -998,10 +1062,14 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     from torch.backends.cuda import enable_cudnn_sdp, enable_flash_sdp, enable_math_sdp, enable_mem_efficient_sdp
 
-    enable_cudnn_sdp(False)
-    enable_flash_sdp(True)
-    enable_mem_efficient_sdp(False)
-    enable_math_sdp(False)
+    sdp_cudnn = bool(int(os.environ.get("SDP_CUDNN", "0")))
+    sdp_flash = bool(int(os.environ.get("SDP_FLASH", "1")))
+    sdp_mem_efficient = bool(int(os.environ.get("SDP_MEM_EFFICIENT", "0")))
+    sdp_math = bool(int(os.environ.get("SDP_MATH", "0")))
+    enable_cudnn_sdp(sdp_cudnn)
+    enable_flash_sdp(sdp_flash)
+    enable_mem_efficient_sdp(sdp_mem_efficient)
+    enable_math_sdp(sdp_math)
 
     logfile = None
     if master_process:
@@ -1077,8 +1145,20 @@ def main() -> None:
         if isinstance(module, Rotary):
             module.inv_freq.data = module.inv_freq.data.float()
     restore_low_dim_params_to_fp32(base_model)
-    compiled_model = torch.compile(base_model, dynamic=False, fullgraph=True)
+    compiled_model = (
+        torch.compile(
+            base_model,
+            dynamic=args.compile_dynamic,
+            fullgraph=args.compile_fullgraph,
+        )
+        if args.use_compile
+        else base_model
+    )
     model: nn.Module = DDP(compiled_model, device_ids=[local_rank], broadcast_buffers=False) if distributed else compiled_model
+    log0(
+        f"compile:enabled={args.use_compile} fullgraph={args.compile_fullgraph} dynamic={args.compile_dynamic} "
+        f"sdp cudnn={int(sdp_cudnn)} flash={int(sdp_flash)} mem_efficient={int(sdp_mem_efficient)} math={int(sdp_math)}"
+    )
 
     # Optimizer split:
     # - token embedding (Adam) uses EMBED_LR
@@ -1099,10 +1179,11 @@ def main() -> None:
     if base_model.skip_weights.numel() > 0:
         scalar_params.append(base_model.skip_weights)
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
-    optimizer_tok = torch.optim.Adam(
+    optimizer_tok = torch.optim.AdamW(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
+        weight_decay=args.adam_weight_decay,
         fused=True,
     )
     optimizer_muon = Muon(
@@ -1113,10 +1194,11 @@ def main() -> None:
     )
     for group in optimizer_muon.param_groups:
         group["base_lr"] = args.matrix_lr
-    optimizer_scalar = torch.optim.Adam(
+    optimizer_scalar = torch.optim.AdamW(
         [{"params": scalar_params, "lr": args.scalar_lr, "base_lr": args.scalar_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
+        weight_decay=args.adam_weight_decay,
         fused=True,
     )
     optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
@@ -1145,6 +1227,17 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(
+        f"eval_tail: skip_post_train_eval={int(args.skip_post_train_eval)} "
+        f"skip_ttt_eval={int(args.skip_ttt_eval)} "
+        f"lane5_compression_w={args.compression_objective_weight} "
+        f" lane5_mdl_lambda={args.mdl_penalty_lambda} lane5_l1_lambda={args.structural_sparsity_lambda}"
+    )
+    log0(
+        f"lawa: enabled={int(args.lawa_enabled)} mode={args.lawa_mode} "
+        f"ema_decay={args.lawa_ema_decay} interval={args.lawa_interval} window={args.lawa_window}"
+    )
+    log0(f"staging_profile:{int(bool(int(os.environ.get('STAGING_PROFILE','0'))))} eval_stride:{args.eval_stride} eval_seq_len:{args.eval_seq_len} muon_wd:{args.muon_weight_decay} adam_wd:{args.adam_weight_decay}")
 
     # -----------------------------
     # DATA LOADER & MODEL WARMUP
@@ -1206,12 +1299,27 @@ def main() -> None:
     torch.cuda.synchronize()
     t0 = time.perf_counter()
 
+    lawa_shadow: dict[str, Tensor] | None = None
+    lawa_ckpt_deque: deque | None = None
+    if args.lawa_enabled:
+        if args.lawa_mode == "ema":
+            lawa_shadow = lawa_ema_shadow_init(base_model)
+        else:
+            lawa_ckpt_deque = deque(maxlen=args.lawa_window)
+
     step = 0
     while True:
         last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
 
         should_validate = last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)
         if should_validate:
+            if last_step and args.lawa_enabled:
+                lawa_finalize_to_model(
+                    base_model, lawa_shadow, lawa_ckpt_deque, args.lawa_window, log0
+                )
+                if distributed:
+                    lawa_broadcast_float_state(base_model)
+                    dist.barrier()
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
             val_loss, val_bpb = eval_val(
@@ -1230,6 +1338,8 @@ def main() -> None:
                 f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
                 f"train_time:{training_time_ms:.0f}ms step_avg:{training_time_ms / max(step, 1):.2f}ms"
             )
+            if last_step:
+                log0(f"quick_metric step:{step} val_bpb:{val_bpb:.8f} train_time_ms:{training_time_ms:.0f}")
             torch.cuda.synchronize()
             t0 = time.perf_counter()
 
@@ -1251,6 +1361,12 @@ def main() -> None:
             x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 loss = model(x, y)
+                if (
+                    args.compression_objective_weight > 0.0
+                    or args.mdl_penalty_lambda > 0.0
+                    or args.structural_sparsity_lambda > 0.0
+                ):
+                    loss = loss + lane5_compression_auxiliary_loss(base_model, args).to(dtype=loss.dtype)
             train_loss += loss.detach()
             (loss * grad_scale).backward()
         train_loss /= grad_accum_steps
@@ -1268,6 +1384,11 @@ def main() -> None:
             torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
         for opt in optimizers:
             opt.step()
+        if args.muon_weight_decay > 0:
+            with torch.no_grad():
+                lr = optimizer_muon.param_groups[0]["lr"]
+                for p in matrix_params:
+                    p.data.mul_(1.0 - args.muon_weight_decay * lr)
         zero_grad_all()
 
         step += 1
@@ -1281,6 +1402,12 @@ def main() -> None:
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
+
+        if args.lawa_enabled:
+            if lawa_shadow is not None:
+                lawa_ema_update(lawa_shadow, base_model, args.lawa_ema_decay)
+            elif lawa_ckpt_deque is not None and step % args.lawa_interval == 0:
+                lawa_ckpt_deque.append(lawa_float_state_cpu(base_model))
 
         # Needed to sync whether we've reached the wallclock cap.
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
@@ -1330,44 +1457,51 @@ def main() -> None:
 
     if distributed:
         dist.barrier()
-    with open("final_model.int8.ptz", "rb") as f:
-        quant_blob_disk = f.read()
-    quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
-    base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
-    torch.cuda.synchronize()
-    t_qeval = time.perf_counter()
-    q_val_loss, q_val_bpb = eval_val(
-        args,
-        model,
-        rank,
-        world_size,
-        device,
-        grad_accum_steps,
-        val_tokens,
-        base_bytes_lut,
-        has_leading_space_lut,
-        is_boundary_token_lut,
-    )
-    torch.cuda.synchronize()
-    log0(
-        f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
-        f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
-    )
-    log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+    if args.skip_post_train_eval:
+        log0(
+            "skip_post_train_eval: skipping int8 roundtrip validation and TTT LoRA "
+            "(set SKIP_POST_TRAIN_EVAL=0 for final_int8_zlib_roundtrip_exact / TTT)"
+        )
+    else:
+        with open("final_model.int8.ptz", "rb") as f:
+            quant_blob_disk = f.read()
+        quant_state = torch.load(io.BytesIO(zlib.decompress(quant_blob_disk)), map_location="cpu")
+        base_model.load_state_dict(dequantize_state_dict_int8(quant_state), strict=True)
+        torch.cuda.synchronize()
+        t_qeval = time.perf_counter()
+        if args.eval_stride > 0:
+            q_val_loss, q_val_bpb = eval_sliding_roundtrip(
+                base_model, args, rank, world_size, device,
+                val_tokens, base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
+            )
+        else:
+            q_val_loss, q_val_bpb = eval_val(
+                args, model, rank, world_size, device, grad_accum_steps,
+                val_tokens, base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
+            )
+        torch.cuda.synchronize()
+        log0(
+            f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} "
+            f"eval_time:{1000.0 * (time.perf_counter() - t_qeval):.0f}ms"
+        )
+        log0(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
 
-    # LoRA test-time training evaluation (the competition score)
-    torch._dynamo.reset()
-    torch.cuda.synchronize()
-    t_ttt = time.perf_counter()
-    ttt_val_loss, ttt_val_bpb = eval_val_ttt_lora(
-        args, base_model, rank, world_size, device,
-        base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
-    )
-    torch.cuda.synchronize()
-    log0(
-        f"final_int8_ttt_lora val_loss:{ttt_val_loss:.4f} val_bpb:{ttt_val_bpb:.4f} "
-        f"eval_time:{1000.0 * (time.perf_counter() - t_ttt):.0f}ms"
-    )
+        if not args.skip_ttt_eval:
+            # LoRA test-time training evaluation (the competition score)
+            torch._dynamo.reset()
+            torch.cuda.synchronize()
+            t_ttt = time.perf_counter()
+            ttt_val_loss, ttt_val_bpb = eval_val_ttt_lora(
+                args, base_model, rank, world_size, device,
+                base_bytes_lut, has_leading_space_lut, is_boundary_token_lut,
+            )
+            torch.cuda.synchronize()
+            log0(
+                f"final_int8_ttt_lora val_loss:{ttt_val_loss:.4f} val_bpb:{ttt_val_bpb:.4f} "
+                f"eval_time:{1000.0 * (time.perf_counter() - t_ttt):.0f}ms"
+            )
+        else:
+            log0("skip_ttt_eval: skipped final_int8_ttt_lora (set SKIP_TTT_EVAL=0 to run)")
 
     if distributed:
         dist.destroy_process_group()

@@ -1,0 +1,46 @@
+{
+  "profile": "lane5_quick_gate",
+  "source_summary": "logs/quick_harness/lane5_quick_gate_20260319_191730.json",
+  "recorded_at": "2026-03-20T02:36:29Z",
+  "harness_defaults": {
+    "DATA_PATH": "./data/datasets/fineweb10B_sp1024_1train",
+    "TOKENIZER_PATH": "./data/tokenizers/fineweb_1024_bpe.model",
+    "SEED": 1337,
+    "ITERATIONS": 20,
+    "SKIP_TTT_EVAL": true,
+    "SKIP_POST_TRAIN_EVAL": false,
+    "RUNTIME_FACTOR": 1.1
+  },
+  "baseline": {
+    "val_bpb": 3.33682083,
+    "train_time_ms": 49191
+  },
+  "candidates": [
+    {
+      "ablation": "MDL_only",
+      "val_bpb": 3.34734325,
+      "train_time_ms": 63994,
+      "delta_vs_baseline": 0.01052242,
+      "gate_pass": false
+    },
+    {
+      "ablation": "sparsity_only",
+      "val_bpb": 3.33949079,
+      "train_time_ms": 49578,
+      "delta_vs_baseline": 0.00266996,
+      "gate_pass": false
+    },
+    {
+      "ablation": "full",
+      "val_bpb": 3.34280892,
+      "train_time_ms": 51564,
+      "delta_vs_baseline": 0.00598809,
+      "gate_pass": false
+    }
+  ],
+  "decision": {
+    "best_candidate_by_val_bpb": "sparsity_only",
+    "quick_gate_passed": false,
+    "notes": "No lane_5 candidate beat baseline val_bpb under the 1.10x runtime guardrail."
+  }
+}
