@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# P1 lane_2 minimal runnable slice: NUM_KV_HEADS=2 vs default (4), fixed NUM_HEADS=8.
-# Full matrix "recurrence+MQA" is not available until recurrence loops exist in train_gpt.py.
+# P1 lane_7 LAWA: EMA shadow (default) vs baseline. Uses stronger EMA decay for 20-step quick harness.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/run_p1_lane2_kv_quick_gate.sh
+  ./scripts/run_p1_lane7_lawa_quick_gate.sh
 
-Env: same as quick_harness (DATA_PATH, TOKENIZER_PATH, SEED, ITERATIONS, SKIP_*).
+Env (optional overrides):
+  LAWA_MODE=ema|checkpoint   (default: ema)
+  LAWA_EMA_DECAY=0.97      (default below; higher beta needs more steps)
+  LAWA_INTERVAL / LAWA_WINDOW for checkpoint mode (e.g. 4 and 5 for 20 steps)
+
 Writes:
-  logs/quick_harness/candidate_p1_lane2_kv2.json (+ .latest.log)
-  logs/quick_harness/p1_lane2_kv_quick_gate_<timestamp>.json
+  logs/quick_harness/candidate_p1_lane7_lawa.json
+  logs/quick_harness/p1_lane7_lawa_quick_gate_<timestamp>.json
 EOF
 }
 
@@ -41,17 +44,19 @@ if [[ ! -x "${HARNESS}" ]]; then
   exit 1
 fi
 
-echo "== P1 lane_2 KV ablation: baseline NUM_KV_HEADS=4 (default) =="
-unset NUM_KV_HEADS
+echo "== P1 lane_7 baseline (LAWA off) =="
+unset LAWA_ENABLED LAWA_MODE LAWA_EMA_DECAY LAWA_INTERVAL LAWA_WINDOW
 "${HARNESS}" baseline
 
 baseline_json="${LOG_DIR}/baseline.json"
 [[ -f "${baseline_json}" ]] || { echo "error: missing baseline.json" >&2; exit 1; }
 
 echo
-echo "== P1 lane_2 candidate: NUM_KV_HEADS=2 (MQA-style), NUM_HEADS=8 =="
-export NUM_KV_HEADS=2
-export NUM_HEADS=8
+echo "== P1 lane_7 candidate (LAWA EMA) =="
+export LAWA_ENABLED=1
+export LAWA_MODE="${LAWA_MODE:-ema}"
+export LAWA_EMA_DECAY="${LAWA_EMA_DECAY:-0.97}"
+# checkpoint example for 20 steps: LAWA_MODE=checkpoint LAWA_INTERVAL=4 LAWA_WINDOW=5
 set +e
 "${HARNESS}" candidate
 set -e
@@ -60,14 +65,14 @@ candidate_json="${LOG_DIR}/candidate.json"
 cand_log="${LOG_DIR}/candidate.latest.log"
 [[ -f "${candidate_json}" && -f "${cand_log}" ]] || { echo "error: missing candidate artifacts" >&2; exit 1; }
 
-tag="p1_lane2_kv2"
+tag="p1_lane7_lawa"
 cp -f "${candidate_json}" "${LOG_DIR}/candidate_${tag}.json"
 cp -f "${cand_log}" "${LOG_DIR}/candidate_${tag}.latest.log"
 
 timestamp="$(date +%Y%m%d_%H%M%S)"
-summary="${LOG_DIR}/p1_lane2_kv_quick_gate_${timestamp}.json"
+summary="${LOG_DIR}/p1_lane7_lawa_quick_gate_${timestamp}.json"
 
-python3 - "${baseline_json}" "${LOG_DIR}/candidate_${tag}.json" "${summary}" "${RUNTIME_FACTOR}" "${SEED}" "${ITERATIONS}" <<'PY'
+python3 - "${baseline_json}" "${LOG_DIR}/candidate_${tag}.json" "${summary}" "${RUNTIME_FACTOR}" "${SEED}" "${ITERATIONS}" "${LAWA_MODE:-ema}" "${LAWA_EMA_DECAY:-0.97}" <<'PY'
 import json
 import pathlib
 import sys
@@ -79,6 +84,8 @@ out_path = pathlib.Path(sys.argv[3]).resolve()
 runtime_factor = float(sys.argv[4])
 seed = int(sys.argv[5])
 iterations = int(sys.argv[6])
+lawa_mode = sys.argv[7]
+lawa_decay = float(sys.argv[8])
 
 b = json.loads(baseline_path.read_text(encoding="utf-8"))
 c = json.loads(cand_path.read_text(encoding="utf-8"))
@@ -89,21 +96,19 @@ passed = bpb_ok and rt_ok
 
 summary = {
     "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    "mode": "p1_lane2_kv_quick_gate",
-    "note": "NUM_KV_HEADS=2 vs default 4; recurrence not in trainer",
+    "mode": "p1_lane7_lawa_quick_gate",
     "runtime_factor": runtime_factor,
     "seed": seed,
     "iterations": iterations,
+    "lawa_mode": lawa_mode,
+    "lawa_ema_decay": lawa_decay,
     "baseline": {
         "snapshot_path": str(baseline_path),
-        "num_kv_heads_config": "default_4",
         "val_bpb": float(b["val_bpb"]),
         "train_time_ms": float(b["train_time_ms"]),
     },
     "candidate": {
         "snapshot_path": str(cand_path),
-        "num_kv_heads": 2,
-        "num_heads": 8,
         "val_bpb": float(c["val_bpb"]),
         "train_time_ms": float(c["train_time_ms"]),
         "delta_val_bpb": float(c["val_bpb"]) - float(b["val_bpb"]),

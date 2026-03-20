@@ -52,14 +52,16 @@ Or use [`scripts/run_p1_lane2_kv_quick_gate.sh`](run_p1_lane2_kv_quick_gate.sh).
 
 ### Lane 7 — LAWA
 
-After wiring:
+**Wired** in [`train_gpt.py`](../train_gpt.py) + [`train_gpt_lawa.py`](../train_gpt_lawa.py). Quick gate runner: [`scripts/run_p1_lane7_lawa_quick_gate.sh`](../scripts/run_p1_lane7_lawa_quick_gate.sh).
 
 ```bash
-export LAWA_ENABLED=1 LAWA_INTERVAL=10 LAWA_WINDOW=5
+export LAWA_ENABLED=1 LAWA_MODE=ema LAWA_EMA_DECAY=0.97
 ./scripts/quick_harness.sh candidate
+# checkpoint-style (needs enough steps for K snapshots), e.g. 20 iters:
+# LAWA_MODE=checkpoint LAWA_INTERVAL=4 LAWA_WINDOW=5
 ```
 
-Typical implementation: EMA shadow weights and/or average last K saved states before final eval/export; must interact correctly with DDP and existing optimizers.
+EMA shadow stays on **GPU** for speed; finalize runs **before** final `eval_val` so `quick_metric` reflects averaged weights.
 
 ### Lane 8 — MTP
 

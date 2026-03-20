@@ -1,12 +1,9 @@
-"""
-The `train_gpt.py` and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but competitive submissions should stay in the `/records` folder.
-
-Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `train_gpt_mlx.py` never are longer than 1500 lines.
-"""
+"""CUDA trainer entrypoint; keep this file ≤1500 lines (see also train_gpt_mlx.py)."""
 
 from __future__ import annotations
 
 import copy
+from collections import deque
 import glob
 import io
 import math
@@ -26,6 +23,14 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel as DDP
+
+from train_gpt_lawa import (
+    lawa_broadcast_float_state,
+    lawa_ema_shadow_init,
+    lawa_ema_update,
+    lawa_finalize_to_model,
+    lawa_float_state_cpu,
+)
 
 # -----------------------------
 # HYPERPARAMETERS
@@ -107,12 +112,14 @@ class Hyperparameters:
     mdl_penalty_lambda = float(os.environ.get("MDL_PENALTY_LAMBDA", "0.0"))
     structural_sparsity_lambda = float(os.environ.get("STRUCTURAL_SPARSITY_LAMBDA", "0.0"))
 
-# -----------------------------
-# MUON OPTIMIZER 
-# -----------------------------
-# 
-# As borrowed from modded-nanogpt
-# Background on Muon: https://kellerjordan.github.io/posts/muon/
+    lawa_enabled = bool(int(os.environ.get("LAWA_ENABLED", "0")))
+    _lawa_mode_raw = os.environ.get("LAWA_MODE", "ema").strip().lower()
+    lawa_mode = _lawa_mode_raw if _lawa_mode_raw in ("ema", "checkpoint") else "ema"
+    lawa_ema_decay = float(os.environ.get("LAWA_EMA_DECAY", "0.999"))
+    lawa_interval = max(1, int(os.environ.get("LAWA_INTERVAL", "10")))
+    lawa_window = max(1, int(os.environ.get("LAWA_WINDOW", "5")))
+
+# MUON optimizer (modded-nanogpt; see kellerjordan.github.io/posts/muon/)
 
 def zeropower_via_newtonschulz5(G: Tensor, steps: int = 10, eps: float = 1e-7) -> Tensor:
     # Orthogonalize a 2D update matrix with a fast Newton-Schulz iteration.
@@ -994,9 +1001,7 @@ def eval_val_ttt_lora(
     val_bpb = float((loss_sum.item() / math.log(2.0)) / byte_sum.item())
     return val_loss, val_bpb
 
-# -----------------------------
 # TRAINING
-# -----------------------------
 
 def main() -> None:
     global zeropower_via_newtonschulz5
@@ -1207,6 +1212,10 @@ def main() -> None:
         f"lane5_compression_w={args.compression_objective_weight} "
         f" lane5_mdl_lambda={args.mdl_penalty_lambda} lane5_l1_lambda={args.structural_sparsity_lambda}"
     )
+    log0(
+        f"lawa: enabled={int(args.lawa_enabled)} mode={args.lawa_mode} "
+        f"ema_decay={args.lawa_ema_decay} interval={args.lawa_interval} window={args.lawa_window}"
+    )
 
     # -----------------------------
     # DATA LOADER & MODEL WARMUP
@@ -1268,12 +1277,27 @@ def main() -> None:
     torch.cuda.synchronize()
     t0 = time.perf_counter()
 
+    lawa_shadow: dict[str, Tensor] | None = None
+    lawa_ckpt_deque: deque | None = None
+    if args.lawa_enabled:
+        if args.lawa_mode == "ema":
+            lawa_shadow = lawa_ema_shadow_init(base_model)
+        else:
+            lawa_ckpt_deque = deque(maxlen=args.lawa_window)
+
     step = 0
     while True:
         last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
 
         should_validate = last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0)
         if should_validate:
+            if last_step and args.lawa_enabled:
+                lawa_finalize_to_model(
+                    base_model, lawa_shadow, lawa_ckpt_deque, args.lawa_window, log0
+                )
+                if distributed:
+                    lawa_broadcast_float_state(base_model)
+                    dist.barrier()
             torch.cuda.synchronize()
             training_time_ms += 1000.0 * (time.perf_counter() - t0)
             val_loss, val_bpb = eval_val(
@@ -1351,6 +1375,12 @@ def main() -> None:
                 f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
+
+        if args.lawa_enabled:
+            if lawa_shadow is not None:
+                lawa_ema_update(lawa_shadow, base_model, args.lawa_ema_decay)
+            elif lawa_ckpt_deque is not None and step % args.lawa_interval == 0:
+                lawa_ckpt_deque.append(lawa_float_state_cpu(base_model))
 
         # Needed to sync whether we've reached the wallclock cap.
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms

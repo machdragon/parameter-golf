@@ -66,7 +66,7 @@ Default output: `logs/quick_harness/lane5_promotion_metrics.json` (override with
 
 ## 3. Suggested priority (low effort → leverage)
 
-1. **lane_7 LAWA** or **lane_8 MTP** first (matrix story: no deploy-time byte cost once heads are dropped / averaging is post-hoc) — *after* trainer support exists.
+1. **lane_7 LAWA** is now in-tree ([`train_gpt_lawa.py`](../train_gpt_lawa.py), [`scripts/run_p1_lane7_lawa_quick_gate.sh`](../scripts/run_p1_lane7_lawa_quick_gate.sh)); **lane_8 MTP** still needs trainer work.
 2. Quick gate: baseline + one candidate.
 3. If any candidate passes: run `collect_lane5_promotion_metrics.sh` and archive a full record folder per [`docs/experiment_workflow.md`](experiment_workflow.md).
 
