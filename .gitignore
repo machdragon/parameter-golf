@@ -14,3 +14,4 @@ runs/
 # Local hypothesis sweeps (generated); keep research/local/*.json + scripts in git on your fork
 research/sweeps/output/
 research/sweeps/logs/
+.tmp/
