@@ -3,11 +3,43 @@
 Copy-paste flows for **RunPod** (submission-style) and **Modal** (remote GPU without managing pods).  
 GCP / Azure: same ideas (VM + data disk + bundle results); sections reserved below.
 
-**Branch / worktree:** lives on `docs/runbook-cloud-runs` (from `main`). To open a second checkout without switching branches:
+To open a **second checkout** without switching branches:
 
 ```bash
-git worktree add ../parameter-golf-runbook docs/runbook-cloud-runs
+git worktree add ../parameter-golf-second main
 ```
+
+---
+
+## RunPod — optimized next run (3 commands)
+
+From repo root on the pod (e.g. `cd /workspace/parameter-golf` after `git pull`):
+
+1. **Preflight** (Python/torch/CUDA, GPU count, dataset + tokenizer):
+
+   ```bash
+   ./scripts/runpod_preflight.sh 8
+   ```
+
+   Use `1` instead of `8` on a 1×H100 pod.
+
+2. **Train** (sets `RUN_ID`, `DATA_PATH`, `TOKENIZER_PATH`, `VOCAB_SIZE`, runs `torchrun`):
+
+   ```bash
+   ./scripts/runpod_train.sh 8x --run-id prod_8xh100_$(date -u +%Y%m%d_%H%MZ)
+   ```
+
+   Smoke on 1×H100: `./scripts/runpod_train.sh 1x --run-id smoke_001`
+
+   Record script: add `--train-gpt records/track_10min_16mb/<your_record>/train_gpt.py`
+
+3. **Finish** (meta + `metrics.json` + tarball for `runpodctl`):
+
+   ```bash
+   ./scripts/runpod_finish.sh "<same RUN_ID as step 2>"
+   ```
+
+Nothing needs to be “built” locally for RunPod: the **[Parameter Golf template](https://console.runpod.io/hub/template/parameter-golf?id=y5cejece4j)** image already includes PyTorch and deps. These scripts only **validate paths** and **standardize** env + post-run packaging.
 
 ---
 
@@ -34,7 +66,11 @@ Official template: **[Parameter Golf on RunPod Hub](https://console.runpod.io/hu
 - Small data while debugging:  
   `python3 data/cached_challenge_fineweb.py --variant sp1024 --train-shards N`
 
-### 1× H100 smoke (from repo root)
+### Manual env (equivalent to `runpod_train.sh`)
+
+If you prefer explicit exports:
+
+**1× H100 smoke**
 
 ```bash
 RUN_ID=smoke_1xh100 \
@@ -44,7 +80,7 @@ VOCAB_SIZE=1024 \
 torchrun --standalone --nproc_per_node=1 train_gpt.py
 ```
 
-### 8× H100 (submission wallclock)
+**8× H100 (submission wallclock)**
 
 ```bash
 RUN_ID=prod_8xh100 \
@@ -57,6 +93,10 @@ torchrun --standalone --nproc_per_node=8 train_gpt.py
 ### After the run — save results off the pod
 
 Training writes under the **current working directory** (`final_model.*`, `logs/<RUN_ID>.txt`).
+
+**One shot:** `./scripts/runpod_finish.sh "$RUN_ID"` (runs the steps below).
+
+**Piecemeal:**
 
 1. **Optional:** record environment metadata (still on the pod, repo root):
 
