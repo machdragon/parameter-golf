@@ -14,26 +14,20 @@ Prerequisite: ./scripts/modal_sync_data.sh (same Modal account).
 If a long training run is in progress, wait for it to finish (or use another workspace)
 so you do not compete for H100 quota.
 
-Keep _FA3_* in sync with LAWA/KURE scripts if you change the base or find-links URL.
+Image definition: `modal_image_fa3_pytorch.py` (Conda pip via `run_commands`).
 """
 
 from __future__ import annotations
 
 import modal
 
+from modal_image_fa3_pytorch import pytorch_fa3_hopper_image
 from modal_train_volume_check import VOL_DATASET_DIR, VOL_TOKENIZER_FILE, ensure_modal_training_data
-
-_FA3_PYTORCH_BASE = "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel"
-_FA3_FIND_LINKS = "https://windreamer.github.io/flash-attention3-wheels/cu126_torch2100"
 
 app = modal.App("parameter-golf-fa3-image-smoke")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
-image = (
-    modal.Image.from_registry(_FA3_PYTORCH_BASE)
-    .pip_install("numpy", "sentencepiece", "zstandard")
-    .pip_install("flash_attn_3", find_links=_FA3_FIND_LINKS)
-)
+image = pytorch_fa3_hopper_image().add_local_python_source("modal_train_volume_check")
 
 
 @app.function(

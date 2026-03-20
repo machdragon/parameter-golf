@@ -274,7 +274,7 @@ Faster image build than the LAWA/FA3 script:
 
 `scripts/modal_train_lawa.py` and `scripts/modal_train_kure_r2_ttt.py` install **prebuilt** `flash_attn_3` wheels ([windreamer index](https://windreamer.github.io/flash-attention3-wheels/)) — no `git clone` / Hopper compile during image build, so new Modal workspaces rebuild in seconds.
 
-Base image is **`pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel`** with **`cu126_torch2100`** find-links. If pip cannot find a wheel, change **`_FA3_PYTORCH_BASE`** and **`_FA3_FIND_LINKS`** together to a matching row on that page.
+Base image and wheel index live in **`scripts/modal_image_fa3_pytorch.py`** (`PYTORCH_FA3_BASE`, `FA3_WHEEL_FIND_LINKS`). Installs use **`run_commands`** + **`/opt/conda/bin/python -m pip`** because Modal’s **`pip_install`** can hit Debian’s PEP 668 `python` on PyTorch Hub images ([Modal: `run_commands`](https://modal.com/docs/guide/images#run-shell-commands-with-run_commands)). If pip cannot find a wheel, change base + find-links together to a matching row on the windreamer page.
 
 Edit **`LOCAL_TRAIN_GPT`** at the top of the script to your record path, e.g.  
 `records/track_10min_16mb/<your_record>/train_gpt.py`.
@@ -342,7 +342,8 @@ Add concrete machine images and commands here once you standardize on a SKU.
 | Symptom | Likely cause |
 |--------|----------------|
 | `git: not found` during Modal image build | Only if you still `git clone` in the image; LAWA/KURE scripts use prebuilt FA3 wheels instead. |
-| Modal build very slow once | Usually large `pip` layers or a **mismatched** FA3 wheel index (pip falls back to source build). Match `_FA3_FIND_LINKS` to `_FA3_PYTORCH_BASE` per [windreamer](https://windreamer.github.io/flash-attention3-wheels/). Cached per workspace — see [Modal images](https://modal.com/docs/guide/images). |
+| Modal build very slow once | Usually large `pip` layers or a **mismatched** FA3 wheel index (pip falls back to source build). Match `FA3_WHEEL_FIND_LINKS` to `PYTORCH_FA3_BASE` in `scripts/modal_image_fa3_pytorch.py` per [windreamer](https://windreamer.github.io/flash-attention3-wheels/). Cached per workspace — see [Modal images](https://modal.com/docs/guide/images). |
+| **`externally-managed-environment`** during Modal image build | PyTorch Hub image: use Conda’s pip (this repo uses `run_commands` + `/opt/conda/bin/python -m pip` in `modal_image_fa3_pytorch.py`), not bare `pip_install` on that base. |
 | SCP fails on RunPod | Use **`runpodctl send/receive`** or full SSH — see links above. |
 | Empty folder after Modal run | Ensure training finished; check `modal volume ls parameter-golf-data runs/` — volume writes need **`commit()`** (handled in our scripts). |
 | `modal volume get` → **No such file or directory** for `runs/<id>` | **`runs/`** was never created: old deploy wrote to **`/root`** only (ephemeral). List root: `modal volume ls parameter-golf-data`. Recover from **Modal UI logs**; redeploy latest scripts. |

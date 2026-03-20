@@ -4,28 +4,24 @@ from typing import Dict
 
 import modal
 
+from modal_image_fa3_pytorch import pytorch_fa3_hopper_image
 from modal_train_volume_check import ensure_modal_training_data
 
 # Training script baked into the image (path relative to repo root).
 # Default: LAWA frontier record on this fork. Override for other records.
 LOCAL_TRAIN_GPT = "records/track_10min_16mb/lawa_frontier/train_gpt.py"
 
-# Prebuilt FlashAttention 3 (Hopper) — no git clone / GPU compile during image build.
-# Index must match CUDA × PyTorch on the base image:
-# https://windreamer.github.io/flash-attention3-wheels/
-_FA3_PYTORCH_BASE = "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel"
-_FA3_FIND_LINKS = "https://windreamer.github.io/flash-attention3-wheels/cu126_torch2100"
-
 app = modal.App("parameter-golf-lawa-frontier")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
+# FA3 image: see modal_image_fa3_pytorch.py (Conda pip — avoids PEP 668 on pytorch hub images).
 image = (
-    modal.Image.from_registry(_FA3_PYTORCH_BASE)
-    .pip_install("numpy", "sentencepiece", "zstandard")
-    .pip_install("flash_attn_3", find_links=_FA3_FIND_LINKS)
-).add_local_file(
-    LOCAL_TRAIN_GPT,
-    remote_path="/root/train_gpt.py",
+    pytorch_fa3_hopper_image()
+    .add_local_python_source("modal_train_volume_check")
+    .add_local_file(
+        LOCAL_TRAIN_GPT,
+        remote_path="/root/train_gpt.py",
+    )
 )
 
 
