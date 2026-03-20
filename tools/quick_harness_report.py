@@ -13,6 +13,9 @@ QUICK_METRIC_RE = re.compile(
 ROUNDTRIP_EXACT_RE = re.compile(
     r"final_int8_zlib_roundtrip_exact val_loss:(?P<val_loss>[-+0-9.eE]+) val_bpb:(?P<val_bpb>[-+0-9.eE]+)"
 )
+SUBMISSION_INT8_ZLIB_RE = re.compile(
+    r"Total submission size int8\+zlib: (?P<bytes>\d+) bytes"
+)
 
 
 def parse_quick_metric(log_path: Path) -> dict[str, float | int | str]:
@@ -34,6 +37,17 @@ def parse_quick_metric(log_path: Path) -> dict[str, float | int | str]:
         "val_bpb": float(last_match.group("val_bpb")),
         "train_time_ms": float(last_match.group("train_time_ms")),
     }
+
+
+def parse_total_submission_int8_zlib_bytes(log_path: Path) -> int | None:
+    """Last `Total submission size int8+zlib:` line if present."""
+    last: int | None = None
+    with log_path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            match = SUBMISSION_INT8_ZLIB_RE.search(line)
+            if match is not None:
+                last = int(match.group("bytes"))
+    return last
 
 
 def parse_final_int8_zlib_roundtrip_exact(log_path: Path) -> dict[str, float] | None:
@@ -117,6 +131,52 @@ def command_compare(args: argparse.Namespace) -> int:
     return 0 if passed else 2
 
 
+def command_promotion(args: argparse.Namespace) -> int:
+    """Extract quick_metric, roundtrip exact val_bpb, and int8+zlib payload bytes vs limit."""
+    limit = int(args.limit_bytes)
+    rows: list[dict[str, object]] = []
+    for raw in args.entry:
+        name, sep, path_str = raw.partition("=")
+        if not sep:
+            raise ValueError(f"expected name=log_path, got: {raw!r}")
+        name = name.strip()
+        log_path = Path(path_str.strip()).resolve()
+        metric = parse_quick_metric(log_path)
+        roundtrip = parse_final_int8_zlib_roundtrip_exact(log_path)
+        nbytes = parse_total_submission_int8_zlib_bytes(log_path)
+        under = nbytes is not None and nbytes <= limit
+        rows.append(
+            {
+                "name": name,
+                "log_path": str(log_path),
+                "quick_metric_val_bpb": metric["val_bpb"],
+                "train_time_ms": metric["train_time_ms"],
+                "final_int8_zlib_roundtrip_exact": roundtrip,
+                "total_submission_int8_zlib_bytes": nbytes,
+                "limit_bytes": limit,
+                "under_16mb_limit": under,
+            }
+        )
+
+    out_path = Path(args.out).resolve() if args.out else None
+    payload = {"entries": rows, "limit_bytes": limit}
+    text = json.dumps(payload, indent=2) + "\n"
+    if out_path is not None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8")
+        print(f"wrote {out_path}")
+    else:
+        print(text, end="")
+
+    missing = [r["name"] for r in rows if r["final_int8_zlib_roundtrip_exact"] is None]
+    if missing:
+        raise ValueError(f"missing final_int8_zlib_roundtrip_exact in: {', '.join(missing)}")
+    missing_b = [r["name"] for r in rows if r["total_submission_int8_zlib_bytes"] is None]
+    if missing_b:
+        raise ValueError(f"missing Total submission size int8+zlib in: {', '.join(missing_b)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Parse and compare quick harness logs.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +192,29 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--candidate", required=True)
     compare.add_argument("--runtime-factor", default=1.10)
     compare.set_defaults(func=command_compare)
+
+    promotion = sub.add_parser(
+        "promotion",
+        help="Extract quick_metric, final_int8_zlib_roundtrip_exact, and int8+zlib bytes from logs.",
+    )
+    promotion.add_argument(
+        "--entry",
+        action="append",
+        required=True,
+        metavar="NAME=LOG_PATH",
+        help="Repeatable: label and harness log path (e.g. baseline=logs/quick_harness/baseline.latest.log).",
+    )
+    promotion.add_argument(
+        "--limit-bytes",
+        type=int,
+        default=16 * 1024 * 1024,
+        help="Max allowed int8+zlib payload bytes (default: 16 MiB).",
+    )
+    promotion.add_argument(
+        "--out",
+        help="Write JSON summary to this path (default: print to stdout).",
+    )
+    promotion.set_defaults(func=command_promotion)
 
     return parser
 
