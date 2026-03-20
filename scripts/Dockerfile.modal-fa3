@@ -5,8 +5,9 @@
 
 FROM pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel
 
-RUN pip install --no-cache-dir numpy sentencepiece zstandard \
- && pip install --no-cache-dir flash_attn_3 \
+# Use Conda's Python (PEP 668 blocks `pip` on the image's system python3).
+RUN /opt/conda/bin/python -m pip install --no-cache-dir numpy sentencepiece zstandard \
+ && /opt/conda/bin/python -m pip install --no-cache-dir flash_attn_3 \
       --find-links https://windreamer.github.io/flash-attention3-wheels/cu126_torch2100
 
 # Add your record's train_gpt.py when mirroring Modal exactly:

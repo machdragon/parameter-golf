@@ -4,6 +4,8 @@ from typing import Dict
 
 import modal
 
+from modal_train_volume_check import ensure_modal_training_data
+
 # Training script: KURE/R2 + tanh reparam + parallel EMA + LoRA TTT
 LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-20_LAWA_KURE_R2_LoRATTT/train_gpt.py"
 
@@ -33,6 +35,7 @@ image = (
     volumes={"/vol": DATA_VOLUME},
 )
 def train(run_id: str, extra_env: Dict[str, str]) -> int:
+    ensure_modal_training_data()
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
     os.chdir(run_dir)

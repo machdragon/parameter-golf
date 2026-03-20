@@ -4,6 +4,8 @@ from typing import Dict
 
 import modal
 
+from modal_train_volume_check import ensure_modal_training_data
+
 # Training script baked into the image (path relative to repo root).
 # Default: LAWA frontier record on this fork. Override for other records.
 LOCAL_TRAIN_GPT = "records/track_10min_16mb/lawa_frontier/train_gpt.py"
@@ -34,6 +36,7 @@ image = (
     volumes={"/vol": DATA_VOLUME},
 )
 def train(run_id: str, extra_env: Dict[str, str]) -> int:
+    ensure_modal_training_data()
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
     # Belt-and-suspenders: some stacks only respect process CWD (not subprocess cwd).

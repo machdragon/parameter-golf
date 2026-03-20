@@ -237,11 +237,22 @@ python3 -m venv .venv-modal
 .venv-modal/bin/modal setup
 ```
 
-Sync dataset + tokenizer to volume **`parameter-golf-data`** (paths mirror local `data/` layout):
+### Required before LAWA / KURE / `parameter-golf-data` training
+
+**Modal never reads `./data/` from your laptop.** Training looks only at the named volume mounted as **`/vol`** inside the container (`DATA_PATH=/vol/datasets/...`, `TOKENIZER_PATH=/vol/tokenizers/...`).
+
+1. **Per Modal account:** run **`./scripts/modal_sync_data.sh`** once (or again after switching Modal logins / empty volume). It uploads:
+   - local **`./data/datasets/fineweb10B_sp1024/`** → volume path **`datasets/fineweb10B_sp1024/`**
+   - local **`./data/tokenizers/fineweb_1024_bpe.model`** → **`tokenizers/fineweb_1024_bpe.model`**
+2. Confirm:
 
 ```bash
 ./scripts/modal_sync_data.sh
+.venv-modal/bin/modal volume ls parameter-golf-data
+.venv-modal/bin/modal volume ls parameter-golf-data tokenizers
 ```
+
+If `fineweb_1024_bpe.model` is missing on the volume, you will get **`Not found: "/vol/tokenizers/..."`** during training until you sync.
 
 ### 1× H100 — baseline `train_gpt.py`
 
@@ -271,7 +282,10 @@ Edit **`LOCAL_TRAIN_GPT`** at the top of the script to your record path, e.g.
 .venv-modal/bin/modal run scripts/modal_train_kure_r2_ttt.py --run-id kure-r2-ttt-001
 ```
 
-**Validate the FA3 image (imports on 1× H100, ~1 min after image build):**
+**Validate FA3 image + volume (1× H100 briefly, ~1 min after image build):**  
+Checks `torch`, `flash_attn_interface`, and that **`parameter-golf-data`** has `datasets/fineweb10B_sp1024` + `tokenizers/fineweb_1024_bpe.model` (loads SentencePiece). Run **`./scripts/modal_sync_data.sh`** first on the same Modal account.
+
+**Wait until any in-flight Modal training run has finished** before running this, so you do not grab another H100 or split attention while the main job completes.
 
 ```bash
 .venv-modal/bin/modal run scripts/modal_fa3_image_smoke.py
@@ -330,4 +344,5 @@ Add concrete machine images and commands here once you standardize on a SKU.
 | SCP fails on RunPod | Use **`runpodctl send/receive`** or full SSH — see links above. |
 | Empty folder after Modal run | Ensure training finished; check `modal volume ls parameter-golf-data runs/` — volume writes need **`commit()`** (handled in our scripts). |
 | `modal volume get` → **No such file or directory** for `runs/<id>` | **`runs/`** was never created: old deploy wrote to **`/root`** only (ephemeral). List root: `modal volume ls parameter-golf-data`. Recover from **Modal UI logs**; redeploy latest scripts. |
+| **`Not found: "/vol/tokenizers/fineweb_1024_bpe.model"`** (SentencePiece) | Volume never seeded for this Modal account. Run **`./scripts/modal_sync_data.sh`** from the repo (needs local `data/datasets/fineweb10B_sp1024` + `data/tokenizers/fineweb_1024_bpe.model`). |
 | **`Timed out waiting for final app logs`** (local CLI) | Often harmless; remote job may still finish. Confirm in the Modal **app run** page. |
