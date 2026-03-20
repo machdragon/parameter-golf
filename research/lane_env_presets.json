@@ -1,0 +1,75 @@
+{
+  "upstream_train_gpt_note": "Presets only set environment variables read by the stock openai/train_gpt.py Hyperparameters class. Anything requiring recurrence, custom quantization, sliding-window eval, or record-local train_gpt.py is NOT env-only — implement in a records/ folder for real SOTA attempts.",
+  "quick_protocol": {
+    "env": {
+      "SEED": "1337",
+      "ITERATIONS": "20",
+      "WARMUP_STEPS": "0",
+      "VAL_LOSS_EVERY": "0",
+      "TRAIN_LOG_EVERY": "99999",
+      "MAX_WALLCLOCK_SECONDS": "180"
+    },
+    "comment": "Short training for screening. Val still uses full val split at end unless you patch train_gpt.py."
+  },
+  "presets": [
+    {
+      "id": "baseline",
+      "lane_ref": null,
+      "env": {},
+      "notes": "Default model shape from starter (9 layers, etc.)."
+    },
+    {
+      "id": "lane_2_kv_heads_2",
+      "lane_ref": "lane_2",
+      "env": { "NUM_KV_HEADS": "2" },
+      "notes": "GQA-style: fewer KV heads (case matrix lane_2 direction)."
+    },
+    {
+      "id": "lane_2_kv_heads_1",
+      "lane_ref": "lane_2",
+      "env": { "NUM_KV_HEADS": "1" },
+      "notes": "MQA-style (verify head divisibility; 8 heads / 1 KV)."
+    },
+    {
+      "id": "lower_lr_like_sota",
+      "lane_ref": null,
+      "env": {
+        "MATRIX_LR": "0.02",
+        "SCALAR_LR": "0.02",
+        "TIED_EMBED_LR": "0.03"
+      },
+      "notes": "Matches theme from records/track_10min_16mb/2026-03-18_LowerLR — often improves stability."
+    },
+    {
+      "id": "num_layers_10",
+      "lane_ref": null,
+      "env": { "NUM_LAYERS": "10" },
+      "notes": "Deeper model; may exceed 16MB for real submission without compression tricks — screening only."
+    },
+    {
+      "id": "train_seq_len_2048",
+      "lane_ref": null,
+      "env": { "TRAIN_SEQ_LEN": "2048" },
+      "notes": "Longer context (see LongContextSeq2048 record); slower — use longer wallclock for real runs."
+    },
+    {
+      "id": "ttt_lora_rank_16",
+      "lane_ref": null,
+      "env": { "TTT_LORA_RANK": "16" },
+      "notes": "Affects TTT LoRA eval path if that eval is active in your run."
+    }
+  ],
+  "lanes_not_env_only": {
+    "lane_1": "Recurrence + train-time LoRA + gating: not in stock Hyperparameters; needs forked train_gpt.py.",
+    "lane_3": "QAT / compression-reg: not in upstream starter env list.",
+    "lane_4": "Tokenizer swap: set TOKENIZER_PATH/VOCAB_SIZE only if you have another .model on disk.",
+    "lane_5": "Composite / multi-mechanism: usually record-local code.",
+    "lane_6": "Entropy / MDL: typically custom loss or routing — code change.",
+    "lane_7": "Muon WD / spectral init: often in winning records as code edits, not a single env.",
+    "lane_8": "Sliding-window or eval hacks: custom forward in record train_gpt.py.",
+    "lane_9": "Pack/routing: code change.",
+    "lane_10": "Often LR + schedule; partial coverage via *_LR envs only.",
+    "lane_11": "Distillation: code change.",
+    "lane_12": "Scratchpad / memory: code change."
+  }
+}
