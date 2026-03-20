@@ -259,13 +259,25 @@ Faster image build than the LAWA/FA3 script:
 
 ### 8× H100 — record-specific `train_gpt.py` (LAWA / FA3 Hopper)
 
-`scripts/modal_train_lawa.py` uses a **heavy** image (FlashAttention Hopper compile on first build).  
-Edit **`LOCAL_TRAIN_GPT`** at the top of that file to your record path, e.g.  
+`scripts/modal_train_lawa.py` and `scripts/modal_train_kure_r2_ttt.py` install **prebuilt** `flash_attn_3` wheels ([windreamer index](https://windreamer.github.io/flash-attention3-wheels/)) — no `git clone` / Hopper compile during image build, so new Modal workspaces rebuild in seconds.
+
+Base image is **`pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel`** with **`cu126_torch2100`** find-links. If pip cannot find a wheel, change **`_FA3_PYTORCH_BASE`** and **`_FA3_FIND_LINKS`** together to a matching row on that page.
+
+Edit **`LOCAL_TRAIN_GPT`** at the top of the script to your record path, e.g.  
 `records/track_10min_16mb/<your_record>/train_gpt.py`.
 
 ```bash
 .venv-modal/bin/modal run scripts/modal_train_lawa.py --run-id lawa-test-001
+.venv-modal/bin/modal run scripts/modal_train_kure_r2_ttt.py --run-id kure-r2-ttt-001
 ```
+
+**Validate the FA3 image (imports on 1× H100, ~1 min after image build):**
+
+```bash
+.venv-modal/bin/modal run scripts/modal_fa3_image_smoke.py
+```
+
+**Cross-account reuse (Docker-style):** Modal does not export internal `im-…` image tarballs; cache is per workspace. To share one environment everywhere, build **`scripts/Dockerfile.modal-fa3`**, push to GHCR (or Docker Hub), then replace the image in the script with `modal.Image.from_registry("ghcr.io/<you>/parameter-golf-modal:<tag>")` and only `add_local_file` for code changes.
 
 ### After the run — artifacts on the Modal volume
 
@@ -313,8 +325,8 @@ Add concrete machine images and commands here once you standardize on a SKU.
 
 | Symptom | Likely cause |
 |--------|----------------|
-| `git: not found` during Modal image build | Add `.apt_install("git")` before `git clone` in the image definition. |
-| Modal build very slow once | Compiling CUDA extensions (e.g. FA Hopper). Cached until you change an earlier image layer — see [Modal images](https://modal.com/docs/guide/images). |
+| `git: not found` during Modal image build | Only if you still `git clone` in the image; LAWA/KURE scripts use prebuilt FA3 wheels instead. |
+| Modal build very slow once | Usually large `pip` layers or a **mismatched** FA3 wheel index (pip falls back to source build). Match `_FA3_FIND_LINKS` to `_FA3_PYTORCH_BASE` per [windreamer](https://windreamer.github.io/flash-attention3-wheels/). Cached per workspace — see [Modal images](https://modal.com/docs/guide/images). |
 | SCP fails on RunPod | Use **`runpodctl send/receive`** or full SSH — see links above. |
 | Empty folder after Modal run | Ensure training finished; check `modal volume ls parameter-golf-data runs/` — volume writes need **`commit()`** (handled in our scripts). |
 | `modal volume get` → **No such file or directory** for `runs/<id>` | **`runs/`** was never created: old deploy wrote to **`/root`** only (ephemeral). List root: `modal volume ls parameter-golf-data`. Recover from **Modal UI logs**; redeploy latest scripts. |

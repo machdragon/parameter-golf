@@ -1,0 +1,13 @@
+# Optional: build once, push to GHCR (or any registry), then use in Modal:
+#   image = modal.Image.from_registry("ghcr.io/<you>/parameter-golf-modal:TAG")
+# PyTorch CUDA 12.6 + prebuilt FA3 wheel index must stay in sync — see windreamer table.
+# https://windreamer.github.io/flash-attention3-wheels/
+
+FROM pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel
+
+RUN pip install --no-cache-dir numpy sentencepiece zstandard \
+ && pip install --no-cache-dir flash_attn_3 \
+      --find-links https://windreamer.github.io/flash-attention3-wheels/cu126_torch2100
+
+# Add your record's train_gpt.py when mirroring Modal exactly:
+# COPY records/track_10min_16mb/lawa_frontier/train_gpt.py /root/train_gpt.py

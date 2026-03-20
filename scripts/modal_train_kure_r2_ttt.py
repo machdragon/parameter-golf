@@ -7,29 +7,22 @@ import modal
 # Training script: KURE/R2 + tanh reparam + parallel EMA + LoRA TTT
 LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-20_LAWA_KURE_R2_LoRATTT/train_gpt.py"
 
+# Prebuilt FlashAttention 3 (Hopper) — no git clone / GPU compile during image build.
+# Index must match CUDA × PyTorch on the base image:
+# https://windreamer.github.io/flash-attention3-wheels/
+_FA3_PYTORCH_BASE = "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel"
+_FA3_FIND_LINKS = "https://windreamer.github.io/flash-attention3-wheels/cu126_torch2100"
+
 app = modal.App("parameter-golf-kure-r2-ttt")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 image = (
-    modal.Image.from_registry("pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel")
-    .apt_install("git")
-    .pip_install(
-        "numpy",
-        "sentencepiece",
-        "zstandard",
-        "flash-attn>=2.7",
-    )
-    .run_commands(
-        # Build FA3 Hopper kernels (provides flash_attn_interface)
-        "git clone --depth 1 https://github.com/Dao-AILab/flash-attention.git /tmp/flash-attention",
-        "cd /tmp/flash-attention/hopper && python setup.py install",
-        "rm -rf /tmp/flash-attention",
-        gpu="H100",
-    )
-    .add_local_file(
-        LOCAL_TRAIN_GPT,
-        remote_path="/root/train_gpt.py",
-    )
+    modal.Image.from_registry(_FA3_PYTORCH_BASE)
+    .pip_install("numpy", "sentencepiece", "zstandard")
+    .pip_install("flash_attn_3", find_links=_FA3_FIND_LINKS)
+).add_local_file(
+    LOCAL_TRAIN_GPT,
+    remote_path="/root/train_gpt.py",
 )
 
 
