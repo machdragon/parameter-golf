@@ -12,13 +12,16 @@ VOL_DATASET_DIR = "/vol/datasets/fineweb10B_sp1024"
 VOL_TOKENIZER_FILE = "/vol/tokenizers/fineweb_1024_bpe.model"
 
 
-def ensure_modal_training_data() -> None:
+def ensure_modal_training_data(
+    dataset_dir: str = VOL_DATASET_DIR,
+    tokenizer_file: str = VOL_TOKENIZER_FILE,
+) -> None:
     """Raise with actionable instructions if required paths are missing on the volume."""
     problems: list[str] = []
-    if not os.path.isdir(VOL_DATASET_DIR):
-        problems.append(f"Missing directory: {VOL_DATASET_DIR}")
-    if not os.path.isfile(VOL_TOKENIZER_FILE):
-        problems.append(f"Missing file: {VOL_TOKENIZER_FILE}")
+    if not os.path.isdir(dataset_dir):
+        problems.append(f"Missing directory: {dataset_dir}")
+    if not os.path.isfile(tokenizer_file):
+        problems.append(f"Missing file: {tokenizer_file}")
     if not problems:
         return
     msg = (

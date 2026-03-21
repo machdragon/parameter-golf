@@ -264,7 +264,7 @@ If **`modal volume put`** errors with **`already exists`** on dataset shards, a 
 
 ### 8× H100 — baseline `train_gpt.py` (no FlashAttention source build)
 
-Faster image build than the LAWA/FA3 script:
+Faster image build than the LAWA/FA3 script. This script uses Modal's `uv_pip_install` on the PyTorch registry image and the same `/vol` dataset + tokenizer paths as the FA3 scripts:
 
 ```bash
 .venv-modal/bin/modal run scripts/modal_train_8x_h100.py --run-id my-modal-8x
@@ -292,6 +292,8 @@ Checks `torch`, `flash_attn_interface`, and that **`parameter-golf-data`** has `
 ```bash
 .venv-modal/bin/modal run scripts/modal_fa3_image_smoke.py
 ```
+
+A successful smoke run ends with **`[modal] FA3 image + volume checks OK.`**. If you see **`No module named 'modal_image_fa3_pytorch'`**, you are running an older checkout; pull the latest branch so Modal mounts both helper modules into the container.
 
 **Cross-account reuse (Docker-style):** Modal does not export internal `im-…` image tarballs; cache is per workspace. To share one environment everywhere, build **`scripts/Dockerfile.modal-fa3`**, push to GHCR (or Docker Hub), then replace the image in the script with `modal.Image.from_registry("ghcr.io/<you>/parameter-golf-modal:<tag>")` and only `add_local_file` for code changes.
 
