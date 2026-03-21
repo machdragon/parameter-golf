@@ -17,7 +17,7 @@ DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=Tr
 # FA3 image: see modal_image_fa3_pytorch.py (`uv_pip_install` on the shared PyTorch base).
 image = (
     pytorch_fa3_hopper_image()
-    .add_local_python_source("modal_train_volume_check")
+    .add_local_python_source("modal_image_fa3_pytorch", "modal_train_volume_check")
     .add_local_file(
         LOCAL_TRAIN_GPT,
         remote_path="/root/train_gpt.py",

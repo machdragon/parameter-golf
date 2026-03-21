@@ -27,7 +27,10 @@ from modal_train_volume_check import VOL_DATASET_DIR, VOL_TOKENIZER_FILE, ensure
 app = modal.App("parameter-golf-fa3-image-smoke")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
-image = pytorch_fa3_hopper_image().add_local_python_source("modal_train_volume_check")
+image = (
+    pytorch_fa3_hopper_image()
+    .add_local_python_source("modal_image_fa3_pytorch", "modal_train_volume_check")
+)
 
 
 @app.function(
