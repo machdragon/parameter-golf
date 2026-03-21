@@ -4,10 +4,10 @@ from typing import Dict
 
 import modal
 
-# Training script: PR #287 base + Overtone init
-LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-21_XSA_Overtone_EMA997/train_gpt.py"
+# Compatibility wrapper script name; config is KURE(0.001)+tanh on PR287/XSA/EMA baseline.
+LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-21_KURE001_Tanh_XSA_EMA997/train_gpt.py"
 
-app = modal.App("parameter-golf-xsa-overtone")
+app = modal.App("parameter-golf-kure001-xsa-ema997")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 
@@ -80,6 +80,10 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
         "WARMDOWN_ITERS": "3000",
         "MUON_WD": "0.04",
         "ADAM_WD": "0.04",
+        # KURE+tanh dial
+        "KURE_LAMBDA": "0.001",
+        "R2_LAMBDA": "0.0",
+        "TANH_REPARAM": "1",
         # Training
         "ITERATIONS": "9000",
         "MAX_WALLCLOCK_SECONDS": "600",
@@ -103,21 +107,24 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
     finally:
         try:
             names = sorted(os.listdir(run_dir))
-            tail = " …" if len(names) > 30 else ""
+            tail = " ..." if len(names) > 30 else ""
             print(f"[modal] volume path {run_dir!r} after train: {names[:30]}{tail}")
-        except OSError as e:
-            print(f"[modal] could not list {run_dir!r}: {e}")
+        except OSError as exc:
+            print(f"[modal] could not list {run_dir!r}: {exc}")
         DATA_VOLUME.commit()
 
 
 @app.local_entrypoint()
 def main(
-    run_id: str = "xsa-overtone-001",
+    run_id: str = "kure001-xsa-ema997-001",
     seed: int = 1337,
     max_wallclock: float = 600.0,
     ema_decay: float = 0.997,
     num_layers: int = 11,
     xsa_last_n: int = 4,
+    kure_lambda: float = 0.001,
+    r2_lambda: float = 0.0,
+    tanh_reparam: bool = True,
 ) -> None:
     extra_env = {
         "SEED": str(seed),
@@ -125,15 +132,21 @@ def main(
         "EMA_DECAY": str(ema_decay),
         "NUM_LAYERS": str(num_layers),
         "XSA_LAST_N": str(xsa_last_n),
+        "KURE_LAMBDA": str(kure_lambda),
+        "R2_LAMBDA": str(r2_lambda),
+        "TANH_REPARAM": "1" if tanh_reparam else "0",
     }
-    print(f"Launching XSA + Overtone + EMA training: run_id={run_id}")
-    print(f"  seed={seed}, ema_decay={ema_decay}, num_layers={num_layers}, xsa_last_n={xsa_last_n}")
+    print(f"Launching KURE+tanh + XSA + EMA training: run_id={run_id}")
+    print(
+        f"  seed={seed}, ema_decay={ema_decay}, num_layers={num_layers}, xsa_last_n={xsa_last_n}, "
+        f"kure_lambda={kure_lambda}, r2_lambda={r2_lambda}, tanh_reparam={int(tanh_reparam)}"
+    )
     rc = train.remote(run_id=run_id, extra_env=extra_env)
     if rc != 0:
         raise RuntimeError(f"Remote training failed with exit code {rc}")
     print("Training completed successfully.")
     print(
-        f"Artifacts on Modal volume `parameter-golf-data`: runs/{run_id}/\n"
-        f"Download with:\n"
+        f"Artifacts on Modal volume `parameter-golf-data`: runs/{run_id}/\\n"
+        f"Download with:\\n"
         f"  modal volume get parameter-golf-data runs/{run_id} ./modal_runs/{run_id}"
     )
