@@ -1,0 +1,12 @@
+{
+  "author": "machdragon",
+  "github_id": "machdragon",
+  "name": "XSA + Overtone Init + EMA 0.997",
+  "blurb": "PR #287 base (SOTA val_bpb=1.1271) with Overtone embedding init added. Overtone reshapes tok_emb singular values to power-law decay for better int6 quantization. No KURE, R2, tanh reparam, or TTT — clean minimal delta over proven SOTA.",
+  "date": "2026-03-21",
+  "base_pr": 287,
+  "base_val_bpb": 1.1271,
+  "target_val_bpb": 1.1271,
+  "changes": ["overtone_init"],
+  "notes": "Awaiting Modal 8xH100 validation runs. Run plan: A=baseline, B=12L, C/D=EMA sweep, E=3-seed validation."
+}
