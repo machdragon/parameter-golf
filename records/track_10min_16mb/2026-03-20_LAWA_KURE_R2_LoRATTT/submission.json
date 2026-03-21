@@ -1,0 +1,20 @@
+{
+  "author": "machdragon",
+  "github_id": "machdragon",
+  "name": "LAWA + KURE/R2 + Tanh Reparam + LoRA TTT",
+  "blurb": "Validated Modal 8xH100 run of the LAWA parallel-EMA + KURE/R2 quantization-regularized + tanh-reparameterized int6 recipe with optional causal LoRA TTT. The stable result for this configuration is the final sliding-window int6 exact metric; LoRA TTT regressed badly on this run and should remain a research toggle, not the default scoring path.",
+  "date": "2026-03-21T00:53:55Z",
+  "val_loss": 2.02852027,
+  "val_bpb": 1.20140397,
+  "pre_quant_val_loss": 2.0231,
+  "pre_quant_val_bpb": 1.1982,
+  "ttt_val_loss": 2.27474682,
+  "ttt_val_bpb": 1.34723312,
+  "step_stop": 4309,
+  "wallclock_seconds": 600.136,
+  "eval_time_seconds": 271.909,
+  "bytes_total": 10424042,
+  "bytes_model_int6_zstd": 10344428,
+  "bytes_code": 79614,
+  "notes": "Canonical validated run_id=kure-r2-ttt-001 on Modal 8xH100. LAWA selected decay=0.995. Final plain int6 roundtrip exact was val_bpb=1.22367515; sliding-window exact is the representative score for this recipe because EVAL_STRIDE=64 in the record script."
+}

@@ -4,13 +4,15 @@ from typing import Dict
 
 import modal
 
+from modal_train_volume_check import ensure_modal_training_data
+
 app = modal.App("parameter-golf-train-h100")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 image = (
     modal.Image.from_registry("pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime")
     .apt_install("git")
-    .pip_install(
+    .uv_pip_install(
         "numpy",
         "tqdm",
         "huggingface-hub",
@@ -21,6 +23,7 @@ image = (
         "tiktoken",
         "sentencepiece",
     )
+    .add_local_python_source("modal_train_volume_check")
     .add_local_file("train_gpt.py", remote_path="/root/train_gpt.py")
 )
 
@@ -50,6 +53,10 @@ def train(
     extra_env: Dict[str, str],
 ) -> int:
     # Persist logs + final_model* on the Modal Volume (train_gpt uses cwd).
+    ensure_modal_training_data(
+        dataset_dir=f"/vol/{data_root}",
+        tokenizer_file=f"/vol/{tokenizer_relpath}",
+    )
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
     os.chdir(run_dir)

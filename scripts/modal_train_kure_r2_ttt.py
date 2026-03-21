@@ -7,11 +7,10 @@ import modal
 from modal_image_fa3_pytorch import pytorch_fa3_hopper_image
 from modal_train_volume_check import ensure_modal_training_data
 
-# Training script baked into the image (path relative to repo root).
-# Default: LAWA frontier record on this fork. Override for other records.
-LOCAL_TRAIN_GPT = "records/track_10min_16mb/lawa_frontier/train_gpt.py"
+# Training script: KURE/R2 + tanh reparam + parallel EMA + LoRA TTT
+LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-20_LAWA_KURE_R2_LoRATTT/train_gpt.py"
 
-app = modal.App("parameter-golf-lawa-frontier")
+app = modal.App("parameter-golf-kure-r2-ttt")
 DATA_VOLUME = modal.Volume.from_name("parameter-golf-data", create_if_missing=True)
 
 # FA3 image: see modal_image_fa3_pytorch.py (`uv_pip_install` on the shared PyTorch base).
@@ -35,7 +34,6 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
     ensure_modal_training_data()
     run_dir = f"/vol/runs/{run_id}"
     os.makedirs(run_dir, exist_ok=True)
-    # Belt-and-suspenders: some stacks only respect process CWD (not subprocess cwd).
     os.chdir(run_dir)
     env = {
         **os.environ,
@@ -43,16 +41,31 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
         "DATA_PATH": "/vol/datasets/fineweb10B_sp1024",
         "TOKENIZER_PATH": "/vol/tokenizers/fineweb_1024_bpe.model",
         "RUN_ID": run_id,
-        # PR #198 defaults
+        # Model shape (PR #198/201 defaults)
         "NUM_LAYERS": "11",
+        "BIGRAM_VOCAB_SIZE": "2048",
+        # Optimizer
         "MUON_WD": "0.04",
         "ADAM_WD": "0.04",
-        "BIGRAM_VOCAB_SIZE": "2048",
+        # LAWA parallel EMA (new defaults)
         "LAWA_ENABLED": "1",
-        "LAWA_EMA_DECAY": "0.995",
+        "LAWA_EMA_DECAY": "0.999",
+        # KURE/R2 quantization-aware regularization
+        "KURE_LAMBDA": "0.01",
+        "R2_LAMBDA": "0.01",
+        # Tanh reparameterization
+        "TANH_REPARAM": "1",
+        # LoRA TTT at eval
+        "TTT_LORA_ENABLED": "1",
+        "TTT_LORA_RANK": "8",
+        "TTT_LORA_LR": "0.01",
+        "TTT_CHUNK_SIZE": "256",
+        "TTT_EVAL_SEQ_LEN": "1024",
+        "TTT_BATCH_SIZE": "64",
+        # Training
         "ITERATIONS": "20000",
         "MAX_WALLCLOCK_SECONDS": "600",
-        # Overrides
+        # Overrides from CLI
         **extra_env,
     }
     try:
@@ -80,25 +93,31 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
 
 @app.local_entrypoint()
 def main(
-    run_id: str = "lawa-frontier-run",
+    run_id: str = "kure-r2-ttt-001",
     seed: int = 1337,
-    lawa_decay: float = 0.995,
-    lawa_enabled: int = 1,
     max_wallclock: float = 600.0,
+    kure_lambda: float = 0.01,
+    r2_lambda: float = 0.01,
+    tanh_reparam: int = 1,
+    ttt_lora_enabled: int = 1,
 ) -> None:
     extra_env = {
         "SEED": str(seed),
-        "LAWA_EMA_DECAY": str(lawa_decay),
-        "LAWA_ENABLED": str(lawa_enabled),
         "MAX_WALLCLOCK_SECONDS": str(max_wallclock),
+        "KURE_LAMBDA": str(kure_lambda),
+        "R2_LAMBDA": str(r2_lambda),
+        "TANH_REPARAM": str(tanh_reparam),
+        "TTT_LORA_ENABLED": str(ttt_lora_enabled),
     }
-    print(f"Launching LAWA frontier training: run_id={run_id}")
-    print(f"  seed={seed}, lawa_decay={lawa_decay}, lawa_enabled={lawa_enabled}")
+    print(f"Launching KURE/R2 + Tanh + Parallel EMA + LoRA TTT training: run_id={run_id}")
+    print(f"  seed={seed}, kure_lambda={kure_lambda}, r2_lambda={r2_lambda}")
+    print(f"  tanh_reparam={tanh_reparam}, ttt_lora_enabled={ttt_lora_enabled}")
     rc = train.remote(run_id=run_id, extra_env=extra_env)
     if rc != 0:
         raise RuntimeError(f"Remote training failed with exit code {rc}")
     print("Training completed successfully.")
     print(
-        f"Artifacts on Modal volume `parameter-golf-data`: runs/{run_id}/ "
-        f"(download with: modal volume get parameter-golf-data runs/{run_id} ./modal_runs/{run_id})"
+        f"Artifacts on Modal volume `parameter-golf-data`: runs/{run_id}/\n"
+        f"Download with:\n"
+        f"  modal volume get parameter-golf-data runs/{run_id} ./modal_runs/{run_id}"
     )

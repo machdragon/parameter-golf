@@ -237,11 +237,24 @@ python3 -m venv .venv-modal
 .venv-modal/bin/modal setup
 ```
 
-Sync dataset + tokenizer to volume **`parameter-golf-data`** (paths mirror local `data/` layout):
+### Required before LAWA / KURE / `parameter-golf-data` training
+
+**Modal never reads `./data/` from your laptop.** Training looks only at the named volume mounted as **`/vol`** inside the container (`DATA_PATH=/vol/datasets/...`, `TOKENIZER_PATH=/vol/tokenizers/...`).
+
+1. **Per Modal account:** run **`./scripts/modal_sync_data.sh`** once (or again after switching Modal logins / empty volume). It uploads:
+   - local **`./data/datasets/fineweb10B_sp1024/`** → volume path **`datasets/fineweb10B_sp1024/`**
+   - local **`./data/tokenizers/fineweb_1024_bpe.model`** → **`tokenizers/fineweb_1024_bpe.model`**
+2. Confirm:
 
 ```bash
 ./scripts/modal_sync_data.sh
+.venv-modal/bin/modal volume ls parameter-golf-data
+.venv-modal/bin/modal volume ls parameter-golf-data tokenizers
 ```
+
+If `fineweb_1024_bpe.model` is missing on the volume, you will get **`Not found: "/vol/tokenizers/..."`** during training until you sync.
+
+If **`modal volume put`** errors with **`already exists`** on dataset shards, a previous sync already uploaded them; **re-run `./scripts/modal_sync_data.sh`** — it continues and **always re-uploads the tokenizer with `--force`**. To overwrite all shards: **`MODAL_SYNC_FORCE=1 ./scripts/modal_sync_data.sh`**.
 
 ### 1× H100 — baseline `train_gpt.py`
 
@@ -251,7 +264,7 @@ Sync dataset + tokenizer to volume **`parameter-golf-data`** (paths mirror local
 
 ### 8× H100 — baseline `train_gpt.py` (no FlashAttention source build)
 
-Faster image build than the LAWA/FA3 script:
+Faster image build than the LAWA/FA3 script. This script uses Modal's `uv_pip_install` on the PyTorch registry image and the same `/vol` dataset + tokenizer paths as the FA3 scripts:
 
 ```bash
 .venv-modal/bin/modal run scripts/modal_train_8x_h100.py --run-id my-modal-8x
@@ -259,13 +272,30 @@ Faster image build than the LAWA/FA3 script:
 
 ### 8× H100 — record-specific `train_gpt.py` (LAWA / FA3 Hopper)
 
-`scripts/modal_train_lawa.py` uses a **heavy** image (FlashAttention Hopper compile on first build).  
-Edit **`LOCAL_TRAIN_GPT`** at the top of that file to your record path, e.g.  
+`scripts/modal_train_lawa.py` and `scripts/modal_train_kure_r2_ttt.py` install **prebuilt** `flash_attn_3` wheels ([windreamer index](https://windreamer.github.io/flash-attention3-wheels/)) — no `git clone` / Hopper compile during image build, so new Modal workspaces rebuild in seconds.
+
+Base image and wheel index live in **`scripts/modal_image_fa3_pytorch.py`** (`PYTORCH_FA3_BASE`, `FA3_WHEEL_FIND_LINKS`). Installs use Modal’s documented **`uv_pip_install`** path for registry images ([Modal `Image` reference](https://modal.com/docs/reference/modal.Image)) so these scripts avoid the PEP 668 `externally-managed-environment` failure that raw **`pip_install`** can hit on PyTorch Hub images. If the FA3 wheel cannot be found, change base + find-links together to a matching row on the windreamer page.
+
+Edit **`LOCAL_TRAIN_GPT`** at the top of the script to your record path, e.g.  
 `records/track_10min_16mb/<your_record>/train_gpt.py`.
 
 ```bash
 .venv-modal/bin/modal run scripts/modal_train_lawa.py --run-id lawa-test-001
+.venv-modal/bin/modal run scripts/modal_train_kure_r2_ttt.py --run-id kure-r2-ttt-001
 ```
+
+**Validate FA3 image + volume (1× H100 briefly, ~1 min after image build):**  
+Checks `torch`, `flash_attn_interface`, and that **`parameter-golf-data`** has `datasets/fineweb10B_sp1024` + `tokenizers/fineweb_1024_bpe.model` (loads SentencePiece). Run **`./scripts/modal_sync_data.sh`** first on the same Modal account.
+
+**Wait until any in-flight Modal training run has finished** before running this, so you do not grab another H100 or split attention while the main job completes.
+
+```bash
+.venv-modal/bin/modal run scripts/modal_fa3_image_smoke.py
+```
+
+A successful smoke run ends with **`[modal] FA3 image + volume checks OK.`**. If you see **`No module named 'modal_image_fa3_pytorch'`**, you are running an older checkout; pull the latest branch so Modal mounts both helper modules into the container.
+
+**Cross-account reuse (Docker-style):** Modal does not export internal `im-…` image tarballs; cache is per workspace. To share one environment everywhere, build **`scripts/Dockerfile.modal-fa3`**, push to GHCR (or Docker Hub), then replace the image in the script with `modal.Image.from_registry("ghcr.io/<you>/parameter-golf-modal:<tag>")` and only `add_local_file` for code changes.
 
 ### After the run — artifacts on the Modal volume
 
@@ -313,9 +343,11 @@ Add concrete machine images and commands here once you standardize on a SKU.
 
 | Symptom | Likely cause |
 |--------|----------------|
-| `git: not found` during Modal image build | Add `.apt_install("git")` before `git clone` in the image definition. |
-| Modal build very slow once | Compiling CUDA extensions (e.g. FA Hopper). Cached until you change an earlier image layer — see [Modal images](https://modal.com/docs/guide/images). |
+| `git: not found` during Modal image build | Only if you still `git clone` in the image; LAWA/KURE scripts use prebuilt FA3 wheels instead. |
+| Modal build very slow once | Usually large `pip` layers or a **mismatched** FA3 wheel index (pip falls back to source build). Match `FA3_WHEEL_FIND_LINKS` to `PYTORCH_FA3_BASE` in `scripts/modal_image_fa3_pytorch.py` per [windreamer](https://windreamer.github.io/flash-attention3-wheels/). Cached per workspace — see [Modal images](https://modal.com/docs/guide/images). |
+| **`externally-managed-environment`** during Modal image build | PyTorch Hub image: use `uv_pip_install` (this repo does that in `modal_image_fa3_pytorch.py`), not bare `pip_install` on that base. |
 | SCP fails on RunPod | Use **`runpodctl send/receive`** or full SSH — see links above. |
 | Empty folder after Modal run | Ensure training finished; check `modal volume ls parameter-golf-data runs/` — volume writes need **`commit()`** (handled in our scripts). |
 | `modal volume get` → **No such file or directory** for `runs/<id>` | **`runs/`** was never created: old deploy wrote to **`/root`** only (ephemeral). List root: `modal volume ls parameter-golf-data`. Recover from **Modal UI logs**; redeploy latest scripts. |
+| **`Not found: "/vol/tokenizers/fineweb_1024_bpe.model"`** (SentencePiece) | Volume never seeded for this Modal account. Run **`./scripts/modal_sync_data.sh`** from the repo (needs local `data/datasets/fineweb10B_sp1024` + `data/tokenizers/fineweb_1024_bpe.model`). |
 | **`Timed out waiting for final app logs`** (local CLI) | Often harmless; remote job may still finish. Confirm in the Modal **app run** page. |
