@@ -1,12 +1,12 @@
 {
   "author": "machdragon",
   "github_id": "machdragon",
-  "name": "XSA + EMA 0.997 + KURE 0.001 + Tanh Reparam",
-  "blurb": "PR #287 base with Overtone removed; adds light KURE (lambda=0.001) and tanh reparameterization to reduce weight entropy while preserving quality, targeting 16MB-safe artifacts and potential 12L headroom.",
+  "name": "XSA + EMA 0.997 + Periodic KURE Sweep (No Tanh)",
+  "blurb": "PR #287 base with Overtone removed and periodic KURE gating via KURE_EVERY to preserve compression gains while recovering wallclock throughput.",
   "date": "2026-03-21",
   "base_pr": 287,
   "base_val_bpb": 1.1271,
   "target_val_bpb": 1.1271,
-  "changes": ["kure_lambda", "tanh_reparam", "remove_overtone"],
-  "notes": "Default Modal run uses XSA_LAST_N=4, EMA_DECAY=0.997, KURE_LAMBDA=0.001, R2_LAMBDA=0.0, TANH_REPARAM=1."
+  "changes": ["kure_lambda", "kure_every", "remove_overtone", "no_tanh_default"],
+  "notes": "Default Track A: XSA_LAST_N=4, EMA_DECAY=0.997, KURE_LAMBDA=0.001, R2_LAMBDA=0.0, KURE_EVERY=8, TANH_REPARAM=0."
 }

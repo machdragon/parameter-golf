@@ -1,8 +1,8 @@
-# XSA + EMA 0.997 + KURE 0.001 + Tanh Reparam
+# XSA + EMA 0.997 + Periodic KURE (No Tanh)
 
-Based on PR #287 (11L XSA+EMA baseline). This variant removes Overtone and adds a
-lightweight entropy-shaping path aimed at preserving quality while creating artifact
-headroom for a future 12L run.
+Based on PR #287 (11L XSA+EMA baseline). This variant focuses on periodic
+KURE regularization (`KURE_EVERY`) to recover wallclock throughput while
+preserving entropy reduction.
 
 ## Base (PR #287)
 
@@ -11,17 +11,14 @@ BigramHash, OrthoInit, U-Net skips, WD=0.04, GQA, int6+zstd, sliding eval.
 
 ## Changes from base
 
-1. **Light KURE regularization** (`KURE_LAMBDA=0.001` default) to nudge weight
-   distributions toward lower entropy without heavy quality regression.
-2. **Optional R2 margin regularization** (`R2_LAMBDA`, default `0.0`) kept as a dial,
-   disabled in the default run.
-3. **Tanh reparameterization** (`TANH_REPARAM=1` default) on large `CastedLinear`
-   matrices during training.
-4. **Export materialization**: before serialization, tanh(P) is materialized into
-   linear weights so quantization/eval sees effective weights directly.
-5. **Overtone removed** from embedding init to avoid extra compression entropy.
+1. **Periodic KURE regularization** via `KURE_EVERY`.
+2. **Explicit gated KURE condition**:
+   `(kure_lambda > 0 or r2_lambda > 0) and step % kure_every == 0`.
+3. **Optional R2 margin regularization** (`R2_LAMBDA`, default `0.0`).
+4. **No tanh reparameterization by default** (`TANH_REPARAM=0`) for speed.
+5. **Overtone removed** from embedding init.
 
-## Default Modal run config
+## Default Modal run config (Track A)
 
 | Variable | Value |
 |----------|-------|
@@ -33,7 +30,8 @@ BigramHash, OrthoInit, U-Net skips, WD=0.04, GQA, int6+zstd, sliding eval.
 | SWA_ENABLED | 0 |
 | KURE_LAMBDA | 0.001 |
 | R2_LAMBDA | 0.0 |
-| TANH_REPARAM | 1 |
+| KURE_EVERY | 8 |
+| TANH_REPARAM | 0 |
 | ITERATIONS | 9000 |
 | MAX_WALLCLOCK_SECONDS | 600 |
 | EVAL_STRIDE | 64 |
@@ -42,7 +40,5 @@ BigramHash, OrthoInit, U-Net skips, WD=0.04, GQA, int6+zstd, sliding eval.
 
 | Run | Config delta | Goal |
 |-----|-------------|------|
-| A | default config above | Find quality/size point at KURE 0.001 |
-| B | `NUM_LAYERS=12` | Check if 12L now fits under 16MB |
-| C | `KURE_LAMBDA=0.003` | More entropy reduction if B is still near cap |
-| D | best config, 2-3 seeds | Confirmation before submission |
+| A | `KURE_LAMBDA=0.001`, `KURE_EVERY=8`, `TANH_REPARAM=0` | Validate speed/size recovery and quality |
+| B | `KURE_LAMBDA=0.005`, `KURE_EVERY=8`, `TANH_REPARAM=0` | Test stronger entropy push for 12L-candidate regime |

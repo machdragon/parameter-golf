@@ -4,7 +4,7 @@ from typing import Dict
 
 import modal
 
-# Compatibility wrapper script name; config is KURE(0.001)+tanh on PR287/XSA/EMA baseline.
+# Compatibility wrapper script name; defaults are periodic KURE(0.001, every=8), no tanh.
 LOCAL_TRAIN_GPT = "records/track_10min_16mb/2026-03-21_KURE001_Tanh_XSA_EMA997/train_gpt.py"
 
 app = modal.App("parameter-golf-kure001-xsa-ema997")
@@ -80,10 +80,11 @@ def train(run_id: str, extra_env: Dict[str, str]) -> int:
         "WARMDOWN_ITERS": "3000",
         "MUON_WD": "0.04",
         "ADAM_WD": "0.04",
-        # KURE+tanh dial
+        # KURE periodic dial
         "KURE_LAMBDA": "0.001",
         "R2_LAMBDA": "0.0",
-        "TANH_REPARAM": "1",
+        "KURE_EVERY": "8",
+        "TANH_REPARAM": "0",
         # Training
         "ITERATIONS": "9000",
         "MAX_WALLCLOCK_SECONDS": "600",
@@ -124,7 +125,8 @@ def main(
     xsa_last_n: int = 4,
     kure_lambda: float = 0.001,
     r2_lambda: float = 0.0,
-    tanh_reparam: bool = True,
+    kure_every: int = 8,
+    tanh_reparam: bool = False,
 ) -> None:
     extra_env = {
         "SEED": str(seed),
@@ -134,12 +136,14 @@ def main(
         "XSA_LAST_N": str(xsa_last_n),
         "KURE_LAMBDA": str(kure_lambda),
         "R2_LAMBDA": str(r2_lambda),
+        "KURE_EVERY": str(kure_every),
         "TANH_REPARAM": "1" if tanh_reparam else "0",
     }
-    print(f"Launching KURE+tanh + XSA + EMA training: run_id={run_id}")
+    print(f"Launching periodic-KURE + XSA + EMA training: run_id={run_id}")
     print(
         f"  seed={seed}, ema_decay={ema_decay}, num_layers={num_layers}, xsa_last_n={xsa_last_n}, "
-        f"kure_lambda={kure_lambda}, r2_lambda={r2_lambda}, tanh_reparam={int(tanh_reparam)}"
+        f"kure_lambda={kure_lambda}, r2_lambda={r2_lambda}, kure_every={kure_every}, "
+        f"tanh_reparam={int(tanh_reparam)}"
     )
     rc = train.remote(run_id=run_id, extra_env=extra_env)
     if rc != 0:

@@ -107,6 +107,7 @@ class Hyperparameters:
     ema_decay = float(os.environ.get("EMA_DECAY", 0.997))
     kure_lambda = float(os.environ.get("KURE_LAMBDA", "0.0"))
     r2_lambda = float(os.environ.get("R2_LAMBDA", "0.0"))
+    kure_every = int(os.environ.get("KURE_EVERY", "1"))
     tanh_reparam = bool(int(os.environ.get("TANH_REPARAM", "0")))
     bigram_vocab_size = int(os.environ.get("BIGRAM_VOCAB_SIZE", 4096))
     bigram_dim = int(os.environ.get("BIGRAM_DIM", 128))
@@ -1082,6 +1083,8 @@ def main() -> None:
 
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
+    if args.kure_every <= 0:
+        raise ValueError(f"KURE_EVERY must be >= 1, got {args.kure_every}")
     zeropower_via_newtonschulz5 = torch.compile(zeropower_via_newtonschulz5)
 
     # -----------------------------
@@ -1282,6 +1285,10 @@ def main() -> None:
         f"max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
     )
     log0(f"seed:{args.seed}")
+    log0(
+        f"kure_config:kure_lambda:{args.kure_lambda} r2_lambda:{args.r2_lambda} "
+        f"kure_every:{args.kure_every} tanh_reparam:{int(args.tanh_reparam)}"
+    )
 
     # -----------------------------
     # DATA LOADER & MODEL WARMUP
@@ -1395,7 +1402,7 @@ def main() -> None:
             x, y = train_loader.next_batch(args.train_batch_tokens, args.train_seq_len, grad_accum_steps)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 loss = model(x, y)
-            if args.kure_lambda > 0 or args.r2_lambda > 0:
+            if (args.kure_lambda > 0 or args.r2_lambda > 0) and (step % args.kure_every == 0):
                 loss = loss + quant_reg_loss(base_model, args.kure_lambda, args.r2_lambda)
             train_loss += loss.detach()
             (loss * grad_scale).backward()
